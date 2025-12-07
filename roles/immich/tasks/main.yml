@@ -58,10 +58,6 @@
     state: started
     enabled: true
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: ./credentials/nas_creds.txt
-
 - name: Create immich application directory
   ansible.builtin.file:
     path: /opt/immich
@@ -92,13 +88,66 @@
     owner: root
     group: root
 
-- name: Mount NAS for photos
-  ansible.posix.mount:
+- name: Create systemd NAS credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ immich_nas_user }}
+      password={{ immich_nas_password }}
+    dest: /etc/immich-nas-credentials
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Create systemd mount unit for NAS
+  ansible.builtin.template:
+    src: mnt-immich-photos.mount.j2
+    dest: /etc/systemd/system/mnt-immich\x2dphotos.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start NAS mount
+  ansible.builtin.systemd:
+    name: mnt-immich\x2dphotos.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for mount to be ready
+  ansible.builtin.wait_for:
     path: /mnt/immich-photos
-    src: "//{{ nas_ip }}/tank/Server/immich"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=0,gid=0,iocharset=utf8,vers=3.0"
-    state: mounted
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify immich photos directory is accessible
+  ansible.builtin.command: ls -A /mnt/immich-photos
+  register: immich_mount_check
+  changed_when: false
+  failed_when: false
+  become: true
 
 - name: Check if postgres password exists
   ansible.builtin.stat:
@@ -193,34 +242,6 @@
     owner: root
     group: root
 
-- name: Create systemd NAS credentials file
-  ansible.builtin.copy:
-    content: |
-      username={{ nas_user }}
-      password={{ nas_password }}
-    dest: /etc/immich-nas-credentials
-    mode: '0600'
-    owner: root
-    group: root
-
-- name: Create systemd mount unit for NAS
-  ansible.builtin.template:
-    src: mnt-immich-photos.mount.j2
-    dest: /etc/systemd/system/mnt-immich\x2dphotos.mount
-    mode: '0644'
-    owner: root
-    group: root
-  notify: Reload systemd
-
-- name: Create wait-for-nas systemd service
-  ansible.builtin.template:
-    src: wait-for-nas.service.j2
-    dest: /etc/systemd/system/wait-for-nas.service
-    mode: '0644'
-    owner: root
-    group: root
-  notify: Reload systemd
-
 - name: Create immich systemd service
   ansible.builtin.template:
     src: immich.service.j2
@@ -228,20 +249,16 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
-- name: Enable wait-for-nas service
-  systemd:
-    name: wait-for-nas.service
-    enabled: yes
-    daemon_reload: yes
-
 - name: Enable and start immich service
-  systemd:
+  ansible.builtin.systemd:
     name: immich.service
-    enabled: yes
+    enabled: true
     state: started
-    daemon_reload: yes
+    daemon_reload: true
+  become: true
 
 - name: Database restoration block
   block:

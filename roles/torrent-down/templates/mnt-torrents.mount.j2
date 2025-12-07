@@ -1,13 +1,13 @@
 [Unit]
-Description=Mount NAS photos share for torrent-down
+Description=Mount NAS torrents share for torrent-down
 After=wait-for-nas.service
 Requires=wait-for-nas.service
-# required
-Requires=wait-for-nas.service
-After=wait-for-nas.service
 
 [Mount]
-What=//{{ nas_ip }}/sas/torrents
+What={{ torrentdown_torrents_share }}
 Where=/mnt/torrents
 Type=cifs
 Options=credentials=/etc/torrent-nas-credentials,uid=torrent,gid=torrent,iocharset=utf8,vers=3.0,_netdev,x-systemd.device-timeout=30s
+
+[Install]
+WantedBy=multi-user.target

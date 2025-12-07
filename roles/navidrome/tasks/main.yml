@@ -1,5 +1,9 @@
 ---
-- name: Install required packages for Docker repository
+# =============================================================================
+# PACKAGE INSTALLATION
+# =============================================================================
+
+- name: Install required packages
   ansible.builtin.apt:
     name:
       - ca-certificates
@@ -8,9 +12,13 @@
       - lsb-release
       - cifs-utils
       - python3-passlib
+      - python3-docker
       - netcat-openbsd
+      - restic
+      - cron
     state: present
     update_cache: true
+  become: true
 
 - name: Create directory for Docker GPG key
   ansible.builtin.file:
@@ -33,14 +41,20 @@
 
 - name: Get system architecture
   ansible.builtin.command: dpkg --print-architecture
-  register: system_arch
+  register: navidrome_system_arch
   changed_when: false
+  become: true
 
 - name: Add Docker repository
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ system_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+    repo: >-
+      deb [arch={{ navidrome_system_arch.stdout }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/debian
+      {{ ansible_distribution_release }} stable
     state: present
     filename: docker
+  become: true
 
 - name: Install Docker and Docker Compose plugin
   ansible.builtin.apt:
@@ -51,21 +65,51 @@
       - docker-compose-plugin
     state: present
     update_cache: true
+  become: true
 
 - name: Ensure Docker service is running
   ansible.builtin.service:
     name: docker
     state: started
     enabled: true
+  become: true
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: ./credentials/nas_creds.txt
+# =============================================================================
+# CHECK FOR EXISTING INSTALLATION
+# =============================================================================
 
-- name: Check if Navidrome has been installed
+- name: Check if Navidrome is already installed
   ansible.builtin.stat:
-    path: /opt/navidrome/.installed
-  register: navidrome_installed
+    path: /opt/navidrome/data/navidrome.db
+  register: navidrome_existing
+  become: true
+
+- name: Set installation type
+  ansible.builtin.set_fact:
+    navidrome_is_fresh_install: "{{ not navidrome_existing.stat.exists }}"
+
+# =============================================================================
+# CREDENTIALS GENERATION
+# =============================================================================
+
+- name: Create credentials directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Generate Restic password
+  ansible.builtin.set_fact:
+    restic_navidrome_password: >-
+      {{ lookup('ansible.builtin.password',
+      playbook_dir + '/credentials/hosts/' + inventory_hostname +
+      '/restic_navidrome_password.txt chars=ascii_letters,digits length=32') }}
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
 
 - name: Create navidrome application directory
   ansible.builtin.file:
@@ -90,103 +134,87 @@
     mode: '0755'
     owner: 1000
     group: 1000
-
-- name: Create NAS mount point directory for navidrome db backups
-  ansible.builtin.file:
-    path: /mnt/navidrome_backup
-    state: directory
-    mode: '0755'
-    owner: 1000
-    group: 1000
-
-- name: Add NAS share to fstab for backups (noauto)
-  ansible.posix.mount:
-    path: /mnt/navidrome_backup
-    src: "//{{ nas_ip }}/tank/Server/navidrome"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=1000,gid=1000,noauto"
-    state: present
   become: true
 
-- name: Mount NAS for backup operations
-  ansible.builtin.command: mount /mnt/navidrome_backup
+# =============================================================================
+# RESTIC CONFIGURATION & DISCOVERY
+# =============================================================================
+
+- name: Create Restic credentials file
+  ansible.builtin.template:
+    src: restic-env.sh.j2
+    dest: /opt/navidrome/restic-env.sh
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+
+- name: Check for existing backups (Fresh Install Only)
+  ansible.builtin.shell: |
+    source /opt/navidrome/restic-env.sh
+    restic snapshots --json --latest 1 --insecure-tls || echo "[]"
+  args:
+    executable: /bin/bash
+  register: navidrome_restic_check
+  become: true
+  changed_when: false
+  when: navidrome_is_fresh_install
+
+- name: Check Restic repository status
+  ansible.builtin.shell: |
+    source /opt/navidrome/restic-env.sh
+    restic snapshots --json --latest 1 --insecure-tls </dev/null
+  args:
+    executable: /bin/bash
+  register: navidrome_restic_check_result
   become: true
   changed_when: false
   failed_when: false
 
-- name: Check if any backups exist on NAS
-  ansible.builtin.find:
-    paths: /mnt/navidrome_backup
-    patterns: "navidrome_db_backup_*.db"
-  register: navidrome_backup_files
+- name: Initialize Restic repository if missing
+  ansible.builtin.shell: |
+    source /opt/navidrome/restic-env.sh
+    restic init --insecure-tls
+  args:
+    executable: /bin/bash
   become: true
+  when:
+    - navidrome_restic_check_result.rc != 0
+    - >-
+      'unable to open config file' in navidrome_restic_check_result.stderr or
+      'Is there a repository' in navidrome_restic_check_result.stderr
 
-- name: Restore from latest backup if available and not fresh install
-  when: 
-    - navidrome_backup_files.matched > 0 
-    - not navidrome_fresh_install | default(false)
-    - not navidrome_installed.stat.exists
-  block:
-    - name: Find latest database backup
-      ansible.builtin.shell: set -o pipefail && ls -t /mnt/navidrome_backup/navidrome_db_backup_*.db | head -1
-      register: navidrome_latest_backup
-      changed_when: false
-      become: true
-      args:
-        executable: /bin/bash
-      ignore_errors: true
+- name: Determine if restore is needed
+  ansible.builtin.set_fact:
+    navidrome_backup_found: >-
+      {{ (navidrome_restic_check.stdout | default('[]') |
+      from_json | length > 0) }}
+  when: navidrome_is_fresh_install
 
-    - name: Stop any existing Navidrome container before restore
-      community.docker.docker_compose_v2:
-        project_src: /opt/navidrome
-        state: absent
-      become: true
-      ignore_errors: true
-
-    - name: Restore database backup to Navidrome directory
-      ansible.builtin.copy:
-        src: "{{ navidrome_latest_backup.stdout }}"
-        dest: /opt/navidrome/data/navidrome.db
-        remote_src: true
-        owner: 1000
-        group: 1000
-        mode: '0644'
-      become: true
-      when: navidrome_latest_backup.stdout is defined and navidrome_latest_backup.rc == 0
-
-- name: Mount NAS for photos
-  ansible.posix.mount:
-    path: /mnt/music
-    src: "//{{ nas_ip }}/tank/Media/Music"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=1000,gid=1000,iocharset=utf8,vers=3.0"
-    state: mounted
-
-- name: Create docker-compose.yml
-  ansible.builtin.template:
-    src: docker-compose.yml.j2
-    dest: /opt/navidrome/docker-compose.yml
-    mode: '0644'
-    owner: 1000
-    group: 1000
+# =============================================================================
+# NAS MOUNT CONFIGURATION
+# =============================================================================
 
 - name: Create systemd NAS credentials file
   ansible.builtin.copy:
     content: |
-      username={{ nas_user }}
-      password={{ nas_password }}
+      username={{ navidrome_nas_user }}
+      password={{ navidrome_nas_password }}
     dest: /etc/navidrome-nas-credentials
     mode: '0600'
     owner: root
     group: root
+  become: true
+  no_log: true
 
-- name: Create systemd mount unit for NAS
+- name: Create systemd mount unit for NAS (read-only)
   ansible.builtin.template:
     src: mnt-music.mount.j2
     dest: /etc/systemd/system/mnt-music.mount
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
 - name: Create wait-for-nas systemd service
@@ -196,7 +224,101 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start NAS mount
+  ansible.builtin.systemd:
+    name: mnt-music.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for mount to be ready
+  ansible.builtin.wait_for:
+    path: /mnt/music
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify music files are accessible
+  ansible.builtin.command: ls -A /mnt/music
+  register: navidrome_music_check
+  changed_when: false
+  failed_when: navidrome_music_check.stdout == ""
+  become: true
+
+# =============================================================================
+# DOCKER COMPOSE DEPLOYMENT
+# =============================================================================
+
+- name: Create docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/navidrome/docker-compose.yml
+    mode: '0644'
+    owner: 1000
+    group: 1000
+  become: true
+
+- name: Start Navidrome with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/navidrome
+    state: present
+    pull: "always"
+  become: true
+
+- name: Wait for Navidrome to be ready
+  ansible.builtin.wait_for:
+    port: 80
+    delay: 10
+    timeout: 120
+
+# =============================================================================
+# RESTORE FROM RESTIC (Fresh Install Only)
+# =============================================================================
+
+- name: Restore Navidrome database from Restic
+  ansible.builtin.shell: |
+    source /opt/navidrome/restic-env.sh
+    cd /opt/navidrome
+    docker compose down
+    restic restore latest --tag navidrome-db --target / --insecure-tls
+    chown 1000:1000 /opt/navidrome/data/navidrome.db
+    chmod 644 /opt/navidrome/data/navidrome.db
+    docker compose up -d
+  args:
+    executable: /bin/bash
+  become: true
+  register: navidrome_restore_result
+  changed_when: navidrome_restore_result.rc == 0
+  failed_when: navidrome_restore_result.rc != 0
+  when:
+    - navidrome_is_fresh_install
+    - navidrome_backup_found
+    - not (navidrome_force_fresh | default(false))
+
+- name: Wait for Navidrome after restore
+  ansible.builtin.wait_for:
+    port: 80
+    delay: 10
+    timeout: 120
+  when:
+    - navidrome_is_fresh_install
+    - navidrome_backup_found
+    - not (navidrome_force_fresh | default(false))
+
+# =============================================================================
+# SYSTEMD SERVICE CONFIGURATION
+# =============================================================================
 
 - name: Create navidrome systemd service
   ansible.builtin.template:
@@ -205,48 +327,109 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
-- name: Enable wait-for-nas service
-  systemd:
-    name: wait-for-nas.service
-    enabled: yes
-    daemon_reload: yes
-
 - name: Enable and start navidrome service
-  systemd:
+  ansible.builtin.systemd:
     name: navidrome.service
-    enabled: yes
+    enabled: true
     state: started
-    daemon_reload: yes
-
-- name: Create installed state file
-  ansible.builtin.file:
-    path: /opt/navidrome/.installed
-    state: touch
-    mode: '0644'
+    daemon_reload: true
   become: true
-  when: not navidrome_installed.stat.exists
+
+# =============================================================================
+# BACKUP AUTOMATION
+# =============================================================================
 
 - name: Create backup script
   ansible.builtin.template:
-    src: backup_navidrome.sh.j2
-    dest: /opt/navidrome/backup_navidrome.sh
+    src: navidrome-backup.sh.j2
+    dest: /opt/navidrome/backup.sh
     mode: '0755'
   become: true
 
-- name: Set up cron job for automatic backup
+- name: Create backup cron job
   ansible.builtin.cron:
-    name: "Backup Navidrome to NAS"
-    job: "/opt/navidrome/backup_navidrome.sh"
-    hour: "3"
+    name: "Navidrome daily backup"
     minute: "0"
+    hour: "3"
+    job: "/opt/navidrome/backup.sh >> /var/log/navidrome-backup.log 2>&1"
     user: root
   become: true
 
-- name: Allow immich port through firewall
+- name: Create log rotation for backup
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/navidrome-backup
+    content: |
+      /var/log/navidrome-backup.log {
+          daily
+          rotate 7
+          compress
+          missingok
+          notifempty
+      }
+    mode: '0644'
+  become: true
+
+# =============================================================================
+# LEGACY CLEANUP
+# =============================================================================
+
+- name: Remove old NAS backup directory mount
+  ansible.posix.mount:
+    path: /mnt/navidrome_backup
+    state: absent
+  become: true
+
+- name: Remove old backup script
+  ansible.builtin.file:
+    path: /opt/navidrome/backup_navidrome.sh
+    state: absent
+  become: true
+
+- name: Remove old backup cron job
+  ansible.builtin.cron:
+    name: "Backup Navidrome to NAS"
+    state: absent
+  become: true
+
+# =============================================================================
+# FIREWALL
+# =============================================================================
+
+- name: Allow Navidrome port through firewall
   community.general.ufw:
     rule: allow
     port: 80
     proto: tcp
+  become: true
   notify: Reload ufw
+
+# =============================================================================
+# FIRST RUN INSTRUCTIONS
+# =============================================================================
+
+- name: Display first run instructions
+  ansible.builtin.debug:
+    msg: |
+      ===================================================================
+      Navidrome installation complete!
+
+      {% if navidrome_is_fresh_install and navidrome_backup_found %}
+      ✓ Restored from Restic backup
+      Your Navidrome instance should be ready with all previous data.
+      {% elif navidrome_is_fresh_install %}
+      ⚠ Fresh installation - no backup found to restore
+      Access the web interface at: http://{{ ansible_host }}
+      Create your admin account on first login.
+      {% else %}
+      ✓ Existing installation updated
+      {% endif %}
+
+      Web interface: http://{{ ansible_host }}
+      Music library: /mnt/music (mounted read-only from NAS)
+      ===================================================================
+  when: >-
+    navidrome_is_fresh_install or
+    (navidrome_backup_found is defined and navidrome_backup_found)

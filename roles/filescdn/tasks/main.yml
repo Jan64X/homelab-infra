@@ -24,19 +24,17 @@
   loop_control:
     loop_var: directory
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/credentials/nas_creds.txt"
-
 - name: Create systemd NAS credentials file
   ansible.builtin.copy:
     content: |
-      username={{ nas_user }}
-      password={{ nas_password }}
+      username={{ filescdn_nas_user }}
+      password={{ filescdn_nas_password }}
     dest: /etc/filescdn-nas-credentials
     mode: '0600'
     owner: root
     group: root
+  become: true
+  no_log: true
 
 - name: Create wait-for-nas systemd service
   ansible.builtin.template:
@@ -45,6 +43,8 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
+  notify: Reload systemd
 
 - name: Create systemd mount unit for NAS
   ansible.builtin.template:
@@ -53,26 +53,43 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
 - name: Enable wait-for-nas service
   ansible.builtin.systemd:
     name: wait-for-nas.service
-    enabled: yes
-    daemon_reload: yes
+    enabled: true
+    daemon_reload: true
+  become: true
 
 - name: Enable and start NAS mount
   ansible.builtin.systemd:
     name: mnt-filescdn.mount
-    enabled: yes
+    enabled: true
     state: started
-    daemon_reload: yes
+    daemon_reload: true
+  become: true
+
+- name: Wait for mount to be ready
+  ansible.builtin.wait_for:
+    path: /mnt/filescdn
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify filescdn directory is accessible
+  ansible.builtin.command: ls -A /mnt/filescdn
+  register: filescdn_mount_check
+  changed_when: false
+  become: true
 
 - name: Configure nginx for filescdn
   ansible.builtin.template:
     src: nginx-filescdn.conf.j2
     dest: /etc/nginx/sites-available/filescdn.conf
     mode: '0644'
+  become: true
   notify: Restart nginx
 
 - name: Enable nginx site
@@ -80,12 +97,14 @@
     src: /etc/nginx/sites-available/filescdn.conf
     dest: /etc/nginx/sites-enabled/filescdn.conf
     state: link
+  become: true
   notify: Restart nginx
 
 - name: Remove default nginx site
   ansible.builtin.file:
     path: /etc/nginx/sites-enabled/default
     state: absent
+  become: true
   notify: Restart nginx
 
 - name: Deploy custom index.html
@@ -95,12 +114,14 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
 
 - name: Stop and disable default nginx service
   ansible.builtin.systemd:
     name: nginx
     state: stopped
-    enabled: no
+    enabled: false
+  become: true
 
 - name: Create custom nginx systemd service for filescdn
   ansible.builtin.template:
@@ -109,14 +130,16 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
 - name: Enable and start custom nginx service
   ansible.builtin.systemd:
     name: nginx-filescdn.service
-    enabled: yes
+    enabled: true
     state: started
-    daemon_reload: yes
+    daemon_reload: true
+  become: true
 
 - name: Allow nginx port 8080
   community.general.ufw:

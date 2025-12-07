@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
 # Load Restic Environment Variables
-source /opt/forgejo/restic-env.sh
+source /opt/sharkey/restic-env.sh
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -15,19 +15,16 @@ if [ -z "${RESTIC_REPOSITORY:-}" ]; then
     exit 1
 fi
 
-log "Starting Forgejo Restic backup..."
+log "Starting Sharkey Restic backup..."
 
 # 1. Backup Database (Stream directly to Restic)
-# We use --stdin-filename so we can target it during restore
+# Sharkey uses PostgreSQL, get credentials from docker.env
 log "Snapshotting Database..."
-docker exec forgejo-db mysqldump \
-    -uroot \
-    -p{{ forgejo_db_root_password }} \
-    --single-transaction \
-    --skip-lock-tables \
-    --routines \
-    --triggers \
-    forgejo | restic backup \
+docker exec sharkey-db-1 pg_dump \
+    -U misskey-user \
+    -d misskey \
+    --no-owner \
+    --no-acl | restic backup \
     --stdin \
     --stdin-filename dump.sql \
     --tag database \
@@ -35,11 +32,10 @@ docker exec forgejo-db mysqldump \
     --insecure-tls
 
 # 2. Backup Files
-# We backup the data directory directly
-log "Snapshotting Data Directory..."
-restic backup /var/lib/forgejo/data \
+# Backup the files directory directly
+log "Snapshotting Files Directory..."
+restic backup /opt/sharkey/files \
     --tag files \
-    --exclude /var/lib/forgejo/data/tmp \
     --host {{ inventory_hostname }} \
     --insecure-tls
 

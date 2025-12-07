@@ -20,9 +20,10 @@ This guide walks you through setting up this Ansible playbook to manage your inf
 4. [Inventory Configuration](#inventory-configuration)
 5. [Variable Configuration](#variable-configuration)
 6. [Credential Management](#credential-management)
-7. [First Run](#first-run)
-8. [Service-Specific Setup](#service-specific-setup)
-9. [Troubleshooting](#troubleshooting)
+7. [MinIO S3 Backup Configuration](#minio-s3-backup-configuration)
+8. [First Run](#first-run)
+9. [Service-Specific Setup](#service-specific-setup)
+10. [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
@@ -345,6 +346,19 @@ static_website:
   local_path: "/srv/nginx/{{ base_domain }}"
   github_api_url: "https://api.github.com/repos/yourusername/yourwebsite/commits/main"
 
+# MinIO/S3 Configuration for Restic Backups
+minio_endpoint: "https://nas.core.lan:9000"
+
+# Forgejo backup credentials
+minio_forgejo_bucket: "forgejo-backups"
+minio_forgejo_access_key: "forgejo-user"
+minio_forgejo_secret_key: "your-strong-password-here"
+
+# Sharkey backup credentials
+minio_sharkey_bucket: "sharkey-backups"
+minio_sharkey_access_key: "sharkey-user"
+minio_sharkey_secret_key: "your-strong-password-here"
+
 ```
 
 ### 3. VPS Variables
@@ -353,19 +367,119 @@ static_website:
 cp group_vars/vpses.yml.example group_vars/vpses.yml
 ```
 
-## Credential Management
+## MinIO S3 Backup Configuration
 
-### 1. NAS Credentials (for NAS backups)
+Multiple services use Restic with MinIO S3-compatible storage for encrypted backups:
+- **Forgejo** - Git repositories and database
+- **Sharkey** - Database and media files
+- **GitLab** - Repositories and database
+- **UniFi Controller** - Configuration backups (.unf files)
+- **Navidrome** - Music database
+- **Observability** - Prometheus and Grafana data
 
-Create `credentials/nas_creds.txt`:
+### Why MinIO + Restic?
+
+- **Append-Only Security**: VMs can write backups but cannot delete old data (ransomware protection)
+- **Encryption**: All backups encrypted by Restic before upload
+- **Deduplication**: Efficient storage of only changed data
+- **S3 Compatible**: Works with MinIO, AWS S3, Backblaze B2, Wasabi, etc.
+
+### Quick Setup
+
+See **[minio/README.md](minio/README.md)** for complete instructions. Summary:
+
+1. Install MinIO client and configure alias
+2. Create buckets for each service
+3. Apply append-only policies
+4. Create service users with restricted permissions
+5. Add credentials to `group_vars/homelab.yml`
+
+**Example `group_vars/homelab.yml` configuration:**
 
 ```yaml
----
-nas_user: your_nas_username
-nas_password: your_nas_password
+# MinIO/S3 Configuration
+minio_endpoint: "https://nas.core.lan:9000"
+
+# Per-service backup credentials
+minio_forgejo_bucket: "forgejo-backups"
+minio_forgejo_access_key: "forgejo-user"
+minio_forgejo_secret_key: "your-strong-password"
+
+minio_sharkey_bucket: "sharkey-backups"
+minio_sharkey_access_key: "sharkey-user"
+minio_sharkey_secret_key: "your-strong-password"
+
+# ... similar for gitlab, unifi, navidrome, observability
 ```
 
-### 2. Host-Specific Credentials
+### NAS Mount Configuration
+
+Some services require direct NAS access for media/data:
+- **Navidrome** - Music library (read-only)
+- **Torrent-Down** - Download directory (read-write)
+- **Files CDN** - Static files (read-only)
+- **Immich** - Photo storage (read-write)
+
+Configure NAS credentials and share paths in `group_vars/homelab.yml`:
+
+```yaml
+# NAS IP address
+nas_ip: "10.0.0.11"
+
+# Navidrome NAS configuration
+navidrome_nas_user: "media-user"
+navidrome_nas_password: "secure-password"
+navidrome_music_share: "//{{ nas_ip }}/tank/Media/Music"
+
+# Torrent-Down NAS configuration
+torrentdown_nas_user: "downloads-user"
+torrentdown_nas_password: "secure-password"
+torrentdown_torrents_share: "//{{ nas_ip }}/sas/torrents"
+
+# Files CDN NAS configuration
+filescdn_nas_user: "cdn-user"
+filescdn_nas_password: "secure-password"
+filescdn_files_share: "//{{ nas_ip }}/tank/Server/filescdn"
+
+# Immich NAS configuration
+immich_nas_user: "photos-user"
+immich_nas_password: "secure-password"
+immich_photos_share: "//{{ nas_ip }}/tank/Server/immich"
+```
+
+**Security Note**: Use dedicated NAS users with minimal permissions for each service.
+
+## Credential Management
+
+### Auto-Generated Credentials
+
+The playbook automatically generates credentials for each host in:
+```
+credentials/hosts/<hostname>/
+├── root_pass.txt
+├── ansible_pass.txt
+├── <system_user>_pass.txt
+├── restic_<service>_password.txt  # Per-service Restic encryption keys
+└── salts/
+```
+
+**Important Notes:**
+- Credentials are generated on first run and reused on subsequent runs
+- Restic passwords encrypt your backup data (keep them safe!)
+- Service-specific passwords (GitLab, Grafana, etc.) are also auto-generated
+- All credential files are gitignored for security
+
+### Manual Configuration Required
+
+Some credentials must be configured in `group_vars/homelab.yml`:
+
+1. **MinIO/S3 credentials** (for Restic backups)
+2. **NAS credentials** (for network mounts)
+3. **External service tokens** (Cloudflare API, SMTP, etc.)
+
+See [Variable Configuration](#variable-configuration) for details.
+
+### Host-Specific Credentials
 
 The playbook automatically generates credentials for each host in:
 ```
@@ -503,6 +617,31 @@ ansible-playbook site.yml --limit nginx-gateway,gitlab
    - Complete web-based setup wizard
    - Admin credentials in `credentials/hosts/sharkey/`
 
+2. **Backup/Restore**:
+   - Backups run daily at 3 AM to MinIO S3 via Restic
+   - On first run with existing backups, automatic restore occurs
+   - Set `sharkey_force_fresh: true` to skip restore and start fresh
+   - Database: PostgreSQL (backed up via `pg_dump`)
+   - Files: `/opt/sharkey/files` directory
+
+3. **Access**: `https://fedi.yourdomain.com`
+
+### Forgejo
+
+1. **Backup/Restore**:
+   - Backups run daily at 3 AM to MinIO S3 via Restic
+   - On first run with existing backups, automatic restore occurs
+   - Set `forgejo_force_fresh: true` to skip restore and start fresh
+   - Database: MySQL (backed up via `mysqldump`)
+   - Files: `/var/lib/forgejo/data` directory
+
+2. **Access**: `https://git.yourdomain.com`
+
+3. **First Run**:
+   - If fresh install, complete the web-based setup wizard
+   - Admin username: Choose any username EXCEPT 'admin' (reserved)
+   - Use email format: `user@forgejo.yourdomain.com`
+
 ### Observability (Prometheus + Grafana)
 
 1. **Grafana Access**:
@@ -571,12 +710,14 @@ apt update && apt install python3
 
 **Problem**: Cannot mount NAS
 - Verify NAS IP in `group_vars/homelab.yml`
-- Check `credentials/nas_creds.txt` has correct credentials
+- Check NAS credentials in `group_vars/homelab.yml` (e.g., `immich_nas_user`, `navidrome_nas_user`)
 - Ensure NAS share exists and is accessible
+- Verify share paths are correct (e.g., `immich_photos_share`, `navidrome_music_share`)
 - Test manual mount:
   ```bash
   sudo mount -t cifs //nas-ip/share /mnt/test -o username=user,password=pass
   ```
+- Check systemd mount status: `sudo systemctl status mnt-*.mount`
 
 ### Firewall Blocking Services
 

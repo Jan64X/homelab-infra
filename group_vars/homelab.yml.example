@@ -70,6 +70,9 @@ monitoring_force_fresh_install: false
 # immich backup restoration settings, set to true to force a fresh install
 immich_force_restore: false
 
+# Set to true to skip automatic restore from backup on fresh install
+sharkey_force_fresh: false
+
 # NAS IP address (adjust to your network)
 nas_ip: "x.x.x.x"
 
@@ -78,6 +81,58 @@ nas_ip: "x.x.x.x"
 static_website:
   enabled: true
   repo_url: "https://github.com/yourusername/yourwebsite.git"
-  repo_branch: "main"
+  repo_branch: "build"
   local_path: "/srv/nginx/{{ base_domain }}"
   github_api_url: "https://api.github.com/repos/yourusername/yourwebsite/commits/main"
+
+# MinIO/S3 Configuration for Restic Backups
+# See minio/README.md for setup instructions
+minio_endpoint: "https://nas.core.lan:9000"
+
+# Forgejo backup configuration
+minio_forgejo_bucket: "forgejo-backups"
+minio_forgejo_access_key: "forgejo-user"
+minio_forgejo_secret_key: "placeholder"
+
+# Sharkey backup configuration
+minio_sharkey_bucket: "sharkey-backups"
+minio_sharkey_access_key: "sharkey-user"
+minio_sharkey_secret_key: "placeholder"
+
+# GitLab backup configuration
+minio_gitlab_bucket: "gitlab-backups"
+minio_gitlab_access_key: "gitlab-user"
+minio_gitlab_secret_key: "placeholder"
+
+# UniFi Controller backup configuration
+minio_unifi_bucket: "unifi-backups"
+minio_unifi_access_key: "unifi-user"
+minio_unifi_secret_key: "placeholder"
+
+# Navidrome backup and NAS mount configuration
+minio_navidrome_bucket: "navidrome-backups"
+minio_navidrome_access_key: "navidrome-user"
+minio_navidrome_secret_key: "placeholder"
+navidrome_nas_user: "someuser"
+navidrome_nas_password: "placeholder"
+navidrome_music_share: "//{{ nas_ip }}/tank/Media/Music"
+
+# Observability (Prometheus + Grafana) backup configuration
+minio_observability_bucket: "observability-backups"
+minio_observability_access_key: "observability-user"
+minio_observability_secret_key: "placeholder"
+
+# Torrent-Down NAS mount configuration (read-write)
+torrentdown_nas_user: "someuser"
+torrentdown_nas_password: "placeholder"
+torrentdown_torrents_share: "//{{ nas_ip }}/sas/torrents"
+
+# Files CDN NAS mount configuration (read-only)
+filescdn_nas_user: "someuser"
+filescdn_nas_password: "placeholder"
+filescdn_files_share: "//{{ nas_ip }}/tank/Server/filescdn"
+
+# Immich NAS mount configuration (read-write)
+immich_nas_user: "someuser"
+immich_nas_password: "placeholder"
+immich_photos_share: "//{{ nas_ip }}/tank/Server/immich"

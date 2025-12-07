@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euo pipefail
+
+# Configuration
+# Load Restic Environment Variables
+source /opt/navidrome/restic-env.sh
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# Check connectivity
+if [ -z "${RESTIC_REPOSITORY:-}" ]; then
+    log "ERROR: Restic environment variables not set."
+    exit 1
+fi
+
+log "Starting Navidrome Restic backup..."
+
+# Backup Navidrome Database
+# Stop container, backup database, restart
+log "Stopping Navidrome container for consistent backup..."
+cd /opt/navidrome
+docker compose down
+
+log "Snapshotting Navidrome database..."
+restic backup /opt/navidrome/data/navidrome.db \
+    --tag navidrome-db \
+    --host {{ inventory_hostname }} \
+    --insecure-tls
+
+log "Starting Navidrome container..."
+docker compose up -d
+
+# MAINTENANCE NOTICE
+# We DO NOT prune here. 
+# This VM has an "Append-Only" (plus locks) policy.
+# Attempting to prune will result in Access Denied errors.
+# Pruning is handled by the central Admin server.
+
+log "Backup upload complete."

@@ -34,4 +34,10 @@ TASK [forgejo : Add NAS mount to fstab] ****************************************
 [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
 ok: [forgejo]
 
-- edit sharkey role to be user@example.com instead of user@fedi.example.com
+- change service ports to forward only to nginx gateway
+- change exporter ports to forward only to prometheus 
+- ^ do these so if it finds that a port is already open but not set to the correct destination then change it
+
+- figure out how to have a proper staging env
+
+- local nginx proxy for local services maybe?

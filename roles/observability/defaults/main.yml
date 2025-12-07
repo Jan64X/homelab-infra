@@ -1,0 +1,3 @@
+---
+# Observability role defaults
+observability_force_fresh: false

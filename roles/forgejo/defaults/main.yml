@@ -15,9 +15,6 @@ forgejo_actions_enabled: true
 # forgejo_domain: "git.example.com"
 # forgejo_root_url: "https://git.example.com/"
 
-# Backup configuration
-forgejo_backup_retention_days: 14
-
 # Restore configuration
 # Set to true to skip automatic restore from backup on fresh install
 forgejo_force_fresh: false

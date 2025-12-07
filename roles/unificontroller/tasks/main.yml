@@ -1,5 +1,9 @@
 ---
-- name: Install required packages for Docker repository
+# =============================================================================
+# PACKAGE INSTALLATION
+# =============================================================================
+
+- name: Install required packages
   ansible.builtin.apt:
     name:
       - ca-certificates
@@ -7,6 +11,9 @@
       - gnupg
       - lsb-release
       - python3-requests
+      - python3-docker
+      - restic
+      - cron
     state: present
     update_cache: true
   become: true
@@ -63,6 +70,47 @@
     enabled: true
   become: true
 
+# =============================================================================
+# CHECK FOR EXISTING INSTALLATION
+# =============================================================================
+
+- name: Check if UniFi Controller is already installed
+  ansible.builtin.stat:
+    path: /var/lib/unifi/data/system.properties
+  register: unifi_existing
+
+- name: Set installation type
+  ansible.builtin.set_fact:
+    is_fresh_install: "{{ not unifi_existing.stat.exists }}"
+
+# =============================================================================
+# CREDENTIALS GENERATION
+# =============================================================================
+
+- name: Create credentials directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Generate database passwords
+  ansible.builtin.set_fact:
+    mongo_root_password: "{{ lookup('ansible.builtin.password',
+                            playbook_dir + '/credentials/hosts/' + inventory_hostname + '/mongo_root_password.txt' +
+                            ' chars=ascii_letters,digits length=32') }}"
+    mongo_unifi_password: "{{ lookup('ansible.builtin.password',
+                            playbook_dir + '/credentials/hosts/' + inventory_hostname + '/mongo_unifi_password.txt' +
+                            ' chars=ascii_letters,digits length=32') }}"
+    restic_unifi_password: "{{ lookup('ansible.builtin.password',
+                              playbook_dir + '/credentials/hosts/' + inventory_hostname + '/restic_unifi_password.txt' +
+                              ' chars=ascii_letters,digits length=32') }}"
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
+
 - name: Create UniFi Controller directories
   ansible.builtin.file:
     path: "{{ directory_item }}"
@@ -71,62 +119,68 @@
   loop:
     - /etc/unifi
     - /etc/unifi/db-init
+    - /opt/unifi
   loop_control:
     loop_var: directory_item
   become: true
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/credentials/nas_creds.txt"
+# =============================================================================
+# RESTIC CONFIGURATION & DISCOVERY
+# =============================================================================
 
-- name: Ensure NAS mount directory exists
-  ansible.builtin.file:
-    path: /mnt/nas_unifi
-    state: directory
-    mode: '0755'
+- name: Create Restic credentials file
+  ansible.builtin.template:
+    src: restic-env.sh.j2
+    dest: /opt/unifi/restic-env.sh
+    mode: '0600'
+    owner: root
+    group: root
   become: true
 
-- name: Add NAS share to fstab (noauto)
-  ansible.posix.mount:
-    path: /mnt/nas_unifi
-    src: "//{{ nas_ip }}/tank/Server/unifi"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=0,gid=0,noauto"
-    state: present
-  become: true
-  no_log: true
-
-- name: Mount NAS for backup operations
-  ansible.builtin.command: mount /mnt/nas_unifi
+- name: Check for existing backups (Fresh Install Only)
+  ansible.builtin.shell: |
+    source /opt/unifi/restic-env.sh
+    restic snapshots --json --latest 1 --insecure-tls || echo "[]"
+  args:
+    executable: /bin/bash
+  register: restic_check
   become: true
   changed_when: false
+  when: is_fresh_install
+
+- name: Check Restic repository status
+  ansible.builtin.shell: |
+    source /opt/unifi/restic-env.sh
+    # </dev/null prevents hanging if it asks for a password
+    restic snapshots --json --latest 1 --insecure-tls </dev/null
+  args:
+    executable: /bin/bash
+  register: restic_check_result
+  become: true
+  changed_when: false
+  # Don't fail the playbook if this command fails (it will fail if repo is empty)
   failed_when: false
 
-- name: Check if UniFi container exists
-  community.docker.docker_container_info:
-    name: unifi-network-application
-  register: unifi_container
+- name: Initialize Restic repository if missing
+  ansible.builtin.shell: |
+    source /opt/unifi/restic-env.sh
+    restic init --insecure-tls
+  args:
+    executable: /bin/bash
   become: true
+  # Only init if the previous command failed AND the error indicates a missing config
+  when:
+    - restic_check_result.rc != 0
+    - "'unable to open config file' in restic_check_result.stderr or 'Is there a repository' in restic_check_result.stderr"
 
-- name: Create credentials directory if it doesn't exist
-  ansible.builtin.file:
-    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
-    state: directory
-    mode: '0700'
-  delegate_to: localhost
-  become: false
-
-- name: Generate MongoDB root password
+- name: Determine if restore is needed
   ansible.builtin.set_fact:
-    mongo_root_password: "{{ lookup('ansible.builtin.password',
-                            playbook_dir + '/credentials/hosts/' + inventory_hostname + '/mongo_root_password.txt' +
-                            ' chars=ascii_letters,digits length=32') }}"
+    backup_found: "{{ (restic_check.stdout | default('[]') | from_json | length > 0) }}"
+  when: is_fresh_install
 
-- name: Generate MongoDB UniFi user password
-  ansible.builtin.set_fact:
-    mongo_unifi_password: "{{ lookup('ansible.builtin.password',
-                            playbook_dir + '/credentials/hosts/' + inventory_hostname + '/mongo_unifi_password.txt' +
-                            ' chars=ascii_letters,digits length=32') }}"
+# =============================================================================
+# MONGODB INITIALIZATION
+# =============================================================================
 
 - name: Create MongoDB init script
   ansible.builtin.template:
@@ -136,7 +190,11 @@
   become: true
   register: mongo_init_result
 
-- name: Copy docker-compose.yml for UniFi Controller
+# =============================================================================
+# DOCKER COMPOSE DEPLOYMENT
+# =============================================================================
+
+- name: Deploy docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.yml.j2
     dest: /etc/unifi/docker-compose.yml
@@ -144,65 +202,12 @@
   become: true
   register: compose_result
 
-- name: Check if any backups exist on NAS
-  ansible.builtin.find:
-    paths: /mnt/nas_unifi
-    patterns: "unifi_backup_*.unf"
-  register: unifi_backup_files
-  become: true
-
-- name: Restore from latest backup if available and not fresh install
-  when: 
-    - unifi_backup_files.matched > 0 
-    - not unifi_fresh_install | default(false)
-    - not unifi_container.exists
-  block:
-    - name: Find latest backup
-      ansible.builtin.shell: set -o pipefail && ls -t /mnt/nas_unifi/unifi_backup_*.unf | head -1
-      register: unifi_latest_backup
-      changed_when: false
-      become: true
-      args:
-        executable: /bin/bash
-      ignore_errors: true
-
-    - name: Create UniFi data directory with proper permissions
-      ansible.builtin.file:
-        path: /var/lib/unifi
-        state: directory
-        owner: "999"
-        group: "999"
-        mode: '0755'
-      become: true
-
-    - name: Copy backup to UniFi data directory for auto-restore
-      ansible.builtin.copy:
-        src: "{{ unifi_latest_backup.stdout }}"
-        dest: /var/lib/unifi/data/backup/autobackup/
-        remote_src: true
-        owner: "999"
-        group: "999"
-        mode: '0644'
-      become: true
-      when: unifi_latest_backup.stdout is defined and unifi_latest_backup.rc == 0
-
-- name: Ensure UniFi data directory exists with correct permissions
-  ansible.builtin.file:
-    path: /var/lib/unifi
-    owner: "999"
-    group: "999"
-    mode: '0755'
-    state: directory
-    recurse: true
-  become: true
-
-- name: Start UniFi Controller containers
+- name: Start UniFi Controller with Docker Compose
   community.docker.docker_compose_v2:
     project_src: /etc/unifi
     state: present
     pull: "always"
   become: true
-  when: mongo_init_result.changed or compose_result.changed or not unifi_container.exists
 
 - name: Wait for UniFi Controller to initialize
   ansible.builtin.wait_for:
@@ -210,21 +215,108 @@
     delay: 30
     timeout: 300
 
+# =============================================================================
+# RESTORE FROM RESTIC (Fresh Install Only)
+# =============================================================================
+
+- name: Create backup directory structure for restore
+  ansible.builtin.file:
+    path: /var/lib/unifi/data/backup/autobackup
+    state: directory
+    owner: '999'
+    group: '999'
+    mode: '0755'
+  become: true
+  when:
+    - is_fresh_install
+    - backup_found
+    - not (unifi_force_fresh | default(false))
+
+- name: Restore UniFi Backup Files from Restic
+  ansible.builtin.shell: |
+    source /opt/unifi/restic-env.sh
+    # Restore 'unifi-backup' tag to root (restic preserves full paths)
+    restic restore latest --tag unifi-backup --target / --insecure-tls
+  args:
+    executable: /bin/bash
+  become: true
+  register: file_restore_result
+  changed_when: file_restore_result.rc == 0 and 'restoring' in file_restore_result.stderr
+  failed_when: file_restore_result.rc != 0
+  when:
+    - is_fresh_install
+    - backup_found
+    - not (unifi_force_fresh | default(false))
+
+- name: Set correct ownership on restored backup files
+  ansible.builtin.file:
+    path: /var/lib/unifi/data/backup/autobackup
+    owner: '999'
+    group: '999'
+    recurse: true
+  become: true
+  when:
+    - is_fresh_install
+    - backup_found
+    - not (unifi_force_fresh | default(false))
+
+- name: Restart UniFi Controller after restore
+  community.docker.docker_compose_v2:
+    project_src: /etc/unifi
+    state: restarted
+  become: true
+  when:
+    - is_fresh_install
+    - backup_found
+    - not (unifi_force_fresh | default(false))
+
+- name: Wait for UniFi to be ready after restore
+  ansible.builtin.wait_for:
+    port: 8443
+    delay: 10
+    timeout: 300
+  when:
+    - is_fresh_install
+    - backup_found
+    - not (unifi_force_fresh | default(false))
+
+# =============================================================================
+# BACKUP AUTOMATION
+# =============================================================================
+
 - name: Create backup script
   ansible.builtin.template:
-    src: backup_unifi.sh.j2
-    dest: /etc/unifi/backup_unifi.sh
+    src: unifi-backup.sh.j2
+    dest: /opt/unifi/backup.sh
     mode: '0755'
   become: true
 
-- name: Set up cron job for automatic backup
+- name: Create backup cron job
   ansible.builtin.cron:
-    name: "Backup UniFi Controller to NAS"
-    job: "/etc/unifi/backup_unifi.sh"
-    hour: "4"
+    name: "UniFi Controller daily backup"
     minute: "0"
+    hour: "3"
+    job: "/opt/unifi/backup.sh >> /var/log/unifi-backup.log 2>&1"
     user: root
   become: true
+
+- name: Create log rotation for backup
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/unifi-backup
+    content: |
+      /var/log/unifi-backup.log {
+          daily
+          rotate 7
+          compress
+          missingok
+          notifempty
+      }
+    mode: '0644'
+  become: true
+
+# =============================================================================
+# FIREWALL
+# =============================================================================
 
 - name: Allow UniFi Controller web interface
   community.general.ufw:
@@ -288,3 +380,32 @@
     port: 5514
     proto: udp
   notify: Reload ufw
+
+# =============================================================================
+# FIRST RUN INSTRUCTIONS
+# =============================================================================
+
+- name: Display first run instructions
+  ansible.builtin.debug:
+    msg: |
+      ===================================================================
+      UniFi Controller installation complete!
+
+      {% if is_fresh_install and backup_found %}
+      ✓ Restored from Restic backup
+      Your UniFi Controller should be ready with all previous data.
+      {% elif is_fresh_install %}
+      ⚠ Fresh installation - no backup found to restore
+      Access the web interface at: https://{{ ansible_host }}:8443
+      Follow the setup wizard to configure your controller.
+      {% else %}
+      ✓ Existing installation updated
+      {% endif %}
+
+      Web interface: https://{{ ansible_host }}:8443
+      ===================================================================
+  when: is_fresh_install or (backup_found is defined and backup_found)
+
+# =============================================================================
+# Note: Automatic adoption may not work due to docker networking, use cli to manually set an adopt address
+# =============================================================================

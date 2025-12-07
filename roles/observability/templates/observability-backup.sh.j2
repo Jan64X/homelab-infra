@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+# Source Restic environment
+source /etc/monitoring/restic-env.sh
+
+echo "===== Observability Backup Started: $(date) ====="
+
+# Stop services for consistent backup
+echo "Stopping services..."
+cd /etc/monitoring
+docker compose down
+
+# Backup Prometheus data
+echo "Backing up Prometheus data..."
+restic backup /var/lib/prometheus \
+    --tag observability-prometheus \
+    --insecure-tls
+
+# Backup Grafana data
+echo "Backing up Grafana data..."
+restic backup /var/lib/grafana \
+    --tag observability-grafana \
+    --insecure-tls
+
+# Restart services
+echo "Restarting services..."
+docker compose up -d
+
+# Prune old backups (keep last 30 daily, 12 monthly)
+echo "Pruning old backups..."
+restic forget \
+    --keep-daily 30 \
+    --keep-monthly 12 \
+    --prune \
+    --insecure-tls
+
+echo "===== Observability Backup Completed: $(date) ====="

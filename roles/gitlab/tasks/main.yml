@@ -9,24 +9,23 @@
       - perl
       - postfix
       - gpg
-      - cifs-utils  # Added for NAS mounting
+      - restic
+      - cron
     state: present
     update_cache: true
 
-- name: Add GitLab package repository GPG key
+- name: Download GitLab GPG key
   ansible.builtin.get_url:
     url: https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey
-    dest: /tmp/gitlab.gpg
+    dest: /usr/share/keyrings/gitlab_gitlab-ce-archive-keyring.asc
     mode: '0644'
-
-- name: Import GitLab GPG key
-  ansible.builtin.apt_key:
-    file: /tmp/gitlab.gpg
-    state: present
 
 - name: Add GitLab repository
   ansible.builtin.apt_repository:
-    repo: "deb https://packages.gitlab.com/gitlab/gitlab-ce/debian/ {{ ansible_distribution_release }} main"
+    repo: >-
+      deb [signed-by=/usr/share/keyrings/gitlab_gitlab-ce-archive-keyring.asc]
+      https://packages.gitlab.com/gitlab/gitlab-ce/debian/
+      {{ ansible_distribution_release }} main
     state: present
     filename: gitlab_gitlab-ce
 
@@ -36,67 +35,89 @@
   register: gitlab_managed
 
 # =============================================================================
-# FIRST TIME SETUP - NAS MOUNTING AND BACKUP DISCOVERY
+# FIRST TIME SETUP - RESTIC CONFIGURATION & DISCOVERY
 # =============================================================================
 
-- name: Create NAS mount point
+- name: Create credentials directory
   ansible.builtin.file:
-    path: /mnt/gitlab_data
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Generate GitLab passwords
+  ansible.builtin.set_fact:
+    gitlab_root_password: "{{ lookup('ansible.builtin.password',
+                         playbook_dir + '/credentials/hosts/' + inventory_hostname + '/gitlab_root_pass.txt' +
+                         ' chars=ascii_letters,digits length=32') }}"
+    gitlab_restic_password: "{{ lookup('ansible.builtin.password',
+                              playbook_dir + '/credentials/hosts/' + inventory_hostname + '/restic_gitlab_password.txt' +
+                              ' chars=ascii_letters,digits length=32') }}"
+
+- name: Create GitLab scripts directory
+  ansible.builtin.file:
+    path: /opt/gitlab
     state: directory
     mode: '0755'
     owner: root
     group: root
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/credentials/nas_creds.txt"
+- name: Create Restic credentials file
+  ansible.builtin.template:
+    src: restic-env.sh.j2
+    dest: /opt/gitlab/restic-env.sh
+    mode: '0600'
+    owner: root
+    group: root
 
-- name: Mount NAS for initial setup (first time only)
-  ansible.posix.mount:
-    path: /mnt/gitlab_data
-    src: "//{{ nas_ip }}/tank/Server/gitlab"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=0,gid=0,dir_mode=02770,iocharset=utf8,x-systemd.mount-timeout=15min"
-    state: mounted
-  when: not gitlab_managed.stat.exists
-
-- name: Check if secrets exist on NAS (first time only)
-  ansible.builtin.stat:
-    path: /mnt/gitlab_data/secrets/gitlab-secrets.json
-  register: nas_secrets_exist
-  when: not gitlab_managed.stat.exists
-
-- name: Check for latest backup on NAS (first time only)
+- name: Check for existing backups (First Time Only)
   ansible.builtin.shell: |
-    if [ -d "/mnt/gitlab_data/backups" ]; then
-      ls -t /mnt/gitlab_data/backups/*_gitlab_backup.tar 2>/dev/null | head -n1 || echo ""
-    else
-      echo ""
-    fi
-  register: latest_backup
-  when: not gitlab_managed.stat.exists
+    source /opt/gitlab/restic-env.sh
+    restic snapshots --json --latest 1 --insecure-tls || echo "[]"
+  args:
+    executable: /bin/bash
+  register: gitlab_restic_check
   changed_when: false
+  when: not gitlab_managed.stat.exists
 
-- name: Debug backup discovery
-  ansible.builtin.debug:
-    msg: 
-      - "GitLab managed: {{ gitlab_managed.stat.exists }}"
-      - "Latest backup found: '{{ latest_backup.stdout }}'"
-      - "Force restore from group var: {{ gitlab_force_restore | default(false) }}"
-      - "Force fresh install from group var: {{ gitlab_force_fresh_install | default(false) }}"
+- name: Check Restic repository status
+  ansible.builtin.shell: |
+    source /opt/gitlab/restic-env.sh
+    restic snapshots --json --latest 1 --insecure-tls </dev/null
+  args:
+    executable: /bin/bash
+  register: gitlab_restic_check_result
+  changed_when: false
+  failed_when: false
+
+- name: Initialize Restic repository if missing
+  ansible.builtin.shell: |
+    source /opt/gitlab/restic-env.sh
+    restic init --insecure-tls
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when:
+    - gitlab_restic_check_result.rc != 0
+    - "'unable to open config file' in gitlab_restic_check_result.stderr or 'Is there a repository' in gitlab_restic_check_result.stderr"
+
+- name: Determine if restore is needed
+  ansible.builtin.set_fact:
+    gitlab_backup_found: "{{ (gitlab_restic_check.stdout | default('[]') | from_json | length > 0) }}"
   when: not gitlab_managed.stat.exists
 
 - name: Set restoration facts
   ansible.builtin.set_fact:
-    should_restore_backup: "{{ gitlab_force_restore | default(false) or (not gitlab_managed.stat.exists and latest_backup.stdout != '') }}"
-    is_fresh_install: "{{ gitlab_force_fresh_install | default(false) or (not gitlab_managed.stat.exists and latest_backup.stdout == '' and not (gitlab_force_restore | default(false))) }}"
+    gitlab_should_restore_backup: "{{ gitlab_force_restore | default(false) or (not gitlab_managed.stat.exists and gitlab_backup_found | default(false)) }}"
+    gitlab_is_fresh_install: "{{ gitlab_force_fresh_install | default(false) or (not gitlab_managed.stat.exists and not (gitlab_backup_found | default(false)) and not (gitlab_force_restore | default(false))) }}"
   when: not gitlab_managed.stat.exists
 
 - name: Debug restoration decisions
   ansible.builtin.debug:
     msg:
-      - "Will restore backup: {{ should_restore_backup | default(false) }}"
-      - "Will do fresh install: {{ is_fresh_install | default(false) }}"
+      - "Will restore backup: {{ gitlab_should_restore_backup | default(false) }}"
+      - "Will do fresh install: {{ gitlab_is_fresh_install | default(false) }}"
   when: not gitlab_managed.stat.exists
 
 # =============================================================================
@@ -112,17 +133,30 @@
   ansible.builtin.file:
     path: /etc/gitlab
     state: directory
+    mode: '0755'
   when: not gitlab_config_dir.stat.exists
 
-- name: Restore GitLab secrets from NAS (first time setup)
-  ansible.builtin.copy:
-    src: /mnt/gitlab_data/secrets/gitlab-secrets.json
-    dest: /etc/gitlab/gitlab-secrets.json
-    remote_src: yes
-    owner: root
-    group: root
-    mode: '0600'
-  when: not gitlab_managed.stat.exists and nas_secrets_exist.stat.exists
+- name: Restore GitLab secrets from Restic (first time setup)
+  ansible.builtin.shell: |
+    source /opt/gitlab/restic-env.sh
+    restic restore latest --tag gitlab-secrets --target / --insecure-tls
+  args:
+    executable: /bin/bash
+  when:
+    - not gitlab_managed.stat.exists
+    - gitlab_should_restore_backup | default(false)
+  changed_when: true
+
+- name: Restore GitLab configuration from Restic (first time setup)
+  ansible.builtin.shell: |
+    source /opt/gitlab/restic-env.sh
+    restic restore latest --tag gitlab-config --target / --insecure-tls
+  args:
+    executable: /bin/bash
+  when:
+    - not gitlab_managed.stat.exists
+    - gitlab_should_restore_backup | default(false)
+  changed_when: true
 
 - name: Configure GitLab (initial configuration)
   ansible.builtin.template:
@@ -172,63 +206,42 @@
 # BACKUP RESTORATION (IF AVAILABLE)
 # =============================================================================
 
-- name: Restore from latest backup on NAS (first time setup)
+- name: Restore from latest backup archive (first time setup)
   ansible.builtin.shell: |
-    set -e
-    
-    # Determine backup file to use
-    if [ -n "{{ latest_backup.stdout }}" ]; then
-      backup_file="{{ latest_backup.stdout }}"
-    else
-      # If forced restore but no latest_backup found, find it again
-      backup_file=$(ls -t /mnt/gitlab_data/backups/*_gitlab_backup.tar 2>/dev/null | head -n1 || echo "")
-    fi
-    
-    if [ -z "$backup_file" ]; then
-      echo "ERROR: No backup file found for restoration"
-      exit 1
-    fi
-    
-    backup_filename=$(basename "$backup_file")
-    backup_timestamp=$(echo "$backup_filename" | sed 's/_gitlab_backup\.tar$//')
-    
-    echo "Found backup: $backup_filename"
-    echo "Backup path: $backup_file"
-    echo "Extracted timestamp: $backup_timestamp"
-    
-    # Verify backup file exists
-    if [ ! -f "$backup_file" ]; then
-      echo "ERROR: Backup file does not exist: $backup_file"
-      exit 1
-    fi
+    source /opt/gitlab/restic-env.sh
     
     # Stop GitLab services for restore
-    echo "Stopping GitLab services..."
     gitlab-ctl stop puma
     gitlab-ctl stop sidekiq
     
-    # Copy backup to local backup directory
-    echo "Copying backup file..."
-    cp "$backup_file" "/var/opt/gitlab/backups/$backup_filename"
-    chown git:git "/var/opt/gitlab/backups/$backup_filename"
+    # Get latest backup snapshot
+    latest_snapshot=$(restic snapshots --tag gitlab-archive --json --insecure-tls | jq -r '.[-1].short_id')
     
-    # Verify local copy exists
-    if [ ! -f "/var/opt/gitlab/backups/$backup_filename" ]; then
-      echo "ERROR: Failed to copy backup file locally"
-      exit 1
+    if [ -n "$latest_snapshot" ]; then
+      echo "Restoring from snapshot: $latest_snapshot"
+      
+      # Restore backup tar to local directory
+      mkdir -p /var/opt/gitlab/backups
+      restic dump "$latest_snapshot" --tag gitlab-archive --insecure-tls | tar -xzf - -C /var/opt/gitlab/backups/
+      
+      # Get backup timestamp from filename
+      backup_file=$(ls -t /var/opt/gitlab/backups/*_gitlab_backup.tar 2>/dev/null | head -1)
+      backup_timestamp=$(basename "$backup_file" | sed 's/_gitlab_backup\.tar$//')
+      
+      # Set correct ownership
+      chown -R git:git /var/opt/gitlab/backups/
+      
+      # Restore the backup
+      gitlab-backup restore BACKUP="$backup_timestamp" force=yes
+      
+      echo "Backup restoration completed successfully"
+    else
+      echo "No backup snapshot found, skipping restore"
     fi
-    
-    # List local backups for debugging
-    echo "Local backups available:"
-    ls -la /var/opt/gitlab/backups/
-    
-    # Restore the backup using the correct timestamp
-    echo "Restoring backup with timestamp: $backup_timestamp"
-    gitlab-backup restore BACKUP="$backup_timestamp" force=yes
-    
-    echo "Backup restoration completed successfully"
-  register: backup_restore_result
-  when: should_restore_backup | default(false)
+  args:
+    executable: /bin/bash
+  register: gitlab_backup_restore_result
+  when: gitlab_should_restore_backup | default(false)
   changed_when: true
 
 # =============================================================================
@@ -300,35 +313,26 @@
 
 - name: Create GitLab backup script directory
   ansible.builtin.file:
-    path: /opt/gitlab/scripts
+    path: /opt/gitlab
     state: directory
     mode: '0755'
     owner: root
     group: root
 
-- name: Create GitLab backup script
+- name: Create GitLab Restic backup script
   ansible.builtin.template:
-    src: gitlab-backup.sh.j2
-    dest: /opt/gitlab/scripts/gitlab-backup.sh
+    src: gitlab-backup-restic.sh.j2
+    dest: /opt/gitlab/backup.sh
     mode: '0755'
     owner: root
     group: root
 
-- name: Add NAS mount to fstab for automatic mounting
-  ansible.posix.mount:
-    path: /mnt/gitlab_data
-    src: "//{{ nas_ip }}/tank/Server/gitlab"
-    fstype: cifs
-    opts: "username={{ nas_user }},password={{ nas_password }},uid=0,gid=0,dir_mode=02770,iocharset=utf8,x-systemd.mount-timeout=15min,noauto"
-    boot: false  # Explicitly set to false to match noauto option
-    state: present
-
 - name: Create backup cron job
   ansible.builtin.cron:
-    name: "GitLab daily backup to NAS"
+    name: "GitLab daily backup to S3"
     minute: "0"
     hour: "2"
-    job: "/opt/gitlab/scripts/gitlab-backup.sh > /var/log/gitlab-backup.log 2>&1"
+    job: "/opt/gitlab/backup.sh > /var/log/gitlab-backup.log 2>&1"
     user: root
 
 - name: Create backup log rotation
@@ -377,10 +381,4 @@
     owner: root
     group: root
     mode: '0644'
-    force: no
-
-- name: Unmount NAS (cleanup after initial setup)
-  ansible.posix.mount:
-    path: /mnt/gitlab_data
-    state: unmounted
-  when: not gitlab_managed.stat.exists
+    force: false

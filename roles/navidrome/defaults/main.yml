@@ -1,4 +1,5 @@
 ---
 # Default variables for navidrome role
 
-navidrome_fresh_install: false
+# Set to true to skip automatic restore from backup on fresh install
+navidrome_force_fresh: false

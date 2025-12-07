@@ -127,19 +127,17 @@
   loop_control:
     loop_var: directory
 
-- name: Load NAS credentials
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/credentials/nas_creds.txt"
-
 - name: Create systemd NAS credentials file
   ansible.builtin.copy:
     content: |
-      username={{ nas_user }}
-      password={{ nas_password }}
+      username={{ torrentdown_nas_user }}
+      password={{ torrentdown_nas_password }}
     dest: /etc/torrent-nas-credentials
     mode: '0600'
     owner: root
     group: root
+  become: true
+  no_log: true
 
 - name: Create wait-for-nas systemd service
   ansible.builtin.template:
@@ -148,6 +146,8 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
+  notify: Reload systemd
 
 - name: Create systemd mount unit for NAS
   ansible.builtin.template:
@@ -156,13 +156,36 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
   notify: Reload systemd
 
 - name: Enable wait-for-nas service
-  systemd:
+  ansible.builtin.systemd:
     name: wait-for-nas.service
-    enabled: yes
-    daemon_reload: yes
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start NAS mount
+  ansible.builtin.systemd:
+    name: mnt-torrents.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for mount to be ready
+  ansible.builtin.wait_for:
+    path: /mnt/torrents
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify torrents directory is accessible
+  ansible.builtin.command: ls -A /mnt/torrents
+  register: torrentdown_mount_check
+  changed_when: false
+  become: true
 
 - name: Check if qBittorrent service exists
   ansible.builtin.stat:
@@ -173,7 +196,8 @@
   ansible.builtin.service:
     name: qbittorrent
     state: stopped
-  when: 
+  become: true
+  when:
     - qbittorrent_service_check.stat.exists
     - not setup_complete_check.stat.exists
 
@@ -194,6 +218,7 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
 
 - name: Allow qBittorrent port only from localhost (IPv4)
   community.general.ufw:
@@ -226,13 +251,16 @@
   register: node_capabilities
   failed_when: false
   changed_when: false
+  become: true
 
 - name: Set capabilities on node binary to allow binding to port 80
   ansible.builtin.shell: |
     setcap cap_net_bind_service=+ep /usr/bin/node
   register: setcap_result
+  become: true
+  changed_when: setcap_result.rc == 0
   when: "'cap_net_bind_service=ep' not in node_capabilities.stdout"
-  failed_when: 
+  failed_when:
     - setcap_result.rc != 0
     - "'No such file or directory' not in setcap_result.stderr"
 
@@ -253,6 +281,7 @@
     mode: '0644'
     owner: root
     group: root
+  become: true
 
 - name: Enable and start Flood service
   ansible.builtin.service:
@@ -285,7 +314,12 @@
     msg:
       - "=== SEEDBOX SETUP COMPLETE ==="
       - "Flood WebUI: http://{{ ansible_default_ipv4.address }}:80"
-      - "{% if not setup_complete_check.stat.exists %}Initial password: {{ initial_password }}{% else %}Initial password stored locally in credentials directory{% endif %}"
+      - >
+        {% if not setup_complete_check.stat.exists %}
+        Initial password: {{ initial_password }}
+        {% else %}
+        Initial password stored locally in credentials directory
+        {% endif %}
       - "Users can change passwords through the web interface"
       - "Future playbook runs will not modify user configurations"
       - "==============================="

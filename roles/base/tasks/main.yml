@@ -516,9 +516,10 @@
   register: cloud_init_config_file
 
 - name: Create cloud-init disable file
-  ansible.builtin.file:
-    path: /etc/cloud/cloud-init.disabled
-    state: touch
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud-init.disabled
+    content: ""
+    force: false  # only create if missing
     mode: '0644'
     owner: root
     group: root

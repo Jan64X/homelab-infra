@@ -41,7 +41,7 @@ services:
       - /etc/monitoring/grafana/provisioning:/etc/grafana/provisioning
       - /etc/localtime:/etc/localtime:ro
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+      - GF_SECURITY_ADMIN_PASSWORD={{ observability_grafana_admin_password }}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-polystat-panel
       - GF_METRICS_ENABLED=true

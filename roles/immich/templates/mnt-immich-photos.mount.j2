@@ -2,12 +2,12 @@
 Description=Mount NAS photos share for Immich
 After=wait-for-nas.service
 Requires=wait-for-nas.service
-# This is the key: This mount will not even be attempted until the wait-for-nas service succeeds.
-Requires=wait-for-nas.service
-After=wait-for-nas.service
 
 [Mount]
-What=//{{ nas_ip }}/tank/Server/immich
+What={{ immich_photos_share }}
 Where=/mnt/immich-photos
 Type=cifs
 Options=credentials=/etc/immich-nas-credentials,uid=0,gid=0,iocharset=utf8,vers=3.0,_netdev,x-systemd.device-timeout=30s
+
+[Install]
+WantedBy=multi-user.target

@@ -16,7 +16,7 @@ This playbook assumes:
 - **Pre-configured hosts** with an `ansible` user (UID/GID 1000)
 - **SSH key-based authentication** already in place
 - **Passwordless sudo** configured for the ansible user
-- **Debian 12** as the base operating system
+- **Debian 12/13** as the base operating system
 
 See [SETUP.md](SETUP.md) for detailed prerequisites and security considerations.
 
@@ -150,17 +150,31 @@ The observability stack provides:
 
 ## 🔄 Backup & Restore
 
-Several roles include NAS integration for:
-- Automated backups to network storage
-- Disaster recovery capabilities
-- Configuration preservation
-- Data restoration on first deployment
+Services use **Restic with MinIO S3** for secure, encrypted, deduplicated backups:
 
-Services with backup support:
-- GitLab (repositories and database)
-- Sharkey (database and media)
-- Immich (photos and database)
-- Navidrome (database and music library)
+### Backup Strategy
+- **Restic**: Encrypted, deduplicated backup tool
+- **MinIO S3**: Self-hosted S3-compatible storage
+- **Append-Only**: VMs can write but not delete backups (ransomware protection)
+- **Auto-Discovery**: Fresh installs automatically restore from latest backup
+- **Scheduled**: Daily cron jobs run backups automatically
+
+### Services with Backup Support
+- **Forgejo** - Git repositories and PostgreSQL database
+- **Sharkey** - PostgreSQL database and media uploads
+- **GitLab** - Repositories and database
+- **UniFi Controller** - .unf configuration backups
+- **Navidrome** - SQLite database
+- **Observability** - Prometheus TSDB and Grafana dashboards
+
+### NAS Integration
+Some services mount NAS shares for direct storage access:
+- **Navidrome** - Music library (read-only mount)
+- **Immich** - Photo storage (read-write mount)
+- **Torrent-Down** - Download directory (read-write mount)
+- **Files CDN** - Static content (read-only mount)
+
+See **[minio/README.md](minio/README.md)** for complete backup setup.
 
 ## 📝 Playbooks
 
