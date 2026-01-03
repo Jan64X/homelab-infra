@@ -25,7 +25,7 @@
     repo: >-
       deb [signed-by=/usr/share/keyrings/gitlab_gitlab-ce-archive-keyring.asc]
       https://packages.gitlab.com/gitlab/gitlab-ce/debian/
-      {{ ansible_distribution_release }} main
+      {{ ansible_facts['distribution_release'] }} main
     state: present
     filename: gitlab_gitlab-ce
 
@@ -376,7 +376,7 @@
 
 - name: Mark GitLab as Ansible managed
   ansible.builtin.copy:
-    content: "GitLab managed by Ansible on {{ ansible_date_time.iso8601 }}"
+    content: "GitLab managed by Ansible on {{ ansible_facts['date_time']['iso8601'] }}"
     dest: /etc/gitlab/.ansible_managed
     owner: root
     group: root

@@ -197,7 +197,7 @@
 
 - name: Disable uncommon network protocols
   ansible.posix.sysctl:
-    name: "{{ item }}"
+    name: "{{ network_protocol_param }}"
     value: '1'
     sysctl_set: true
     state: present
@@ -208,6 +208,8 @@
     - net.ipv4.conf.default.drop_gratuitous_arp
     - net.ipv4.conf.all.drop_unicast_in_l2_multicast
     - net.ipv4.conf.default.drop_unicast_in_l2_multicast
+  loop_control:
+    loop_var: network_protocol_param
 
 - name: Enable TCP hardening
   ansible.posix.sysctl:

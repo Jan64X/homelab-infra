@@ -36,7 +36,7 @@
 
 # Monitor file deletions
 # Note: unlink and rename syscalls don't exist on arm64, only unlinkat/renameat
-{% if ansible_architecture == 'x86_64' %}
+{% if ansible_facts['architecture'] == 'x86_64' %}
 -a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat -F auid>=1000 -F auid!=-1 -k delete
 {% else %}
 -a always,exit -F arch=b64 -S unlinkat,renameat -F auid>=1000 -F auid!=-1 -k delete
