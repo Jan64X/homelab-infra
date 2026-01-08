@@ -1,0 +1,100 @@
+---
+# Unbound DNS Server Installation and Configuration
+
+- name: Check if systemd-resolved is running
+  ansible.builtin.command:
+    cmd: systemctl is-active systemd-resolved
+  register: resolved_status
+  changed_when: false
+  failed_when: false
+
+- name: Create systemd-resolved config directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: resolved_status.rc == 0
+
+- name: Disable systemd-resolved stub listener
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/no-stub.conf
+    content: |
+      [Resolve]
+      DNSStubListener=no
+    owner: root
+    group: root
+    mode: "0644"
+  when: resolved_status.rc == 0
+  notify: Restart systemd-resolved
+
+- name: Flush handlers to restart systemd-resolved before unbound starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Install unbound and dependencies
+  ansible.builtin.apt:
+    name:
+      - unbound
+      - dns-root-data
+      - ca-certificates
+    state: present
+    update_cache: true
+
+- name: Setup unbound-control keys
+  ansible.builtin.command:
+    cmd: /usr/sbin/unbound-control-setup
+    creates: /etc/unbound/unbound_server.key
+
+- name: Ensure /var/lib/unbound directory exists
+  ansible.builtin.file:
+    path: /var/lib/unbound
+    state: directory
+    owner: unbound
+    group: unbound
+    mode: "0755"
+
+- name: Copy DNSSEC root key from dns-root-data
+  ansible.builtin.copy:
+    src: /usr/share/dns/root.key
+    dest: /var/lib/unbound/root.key
+    remote_src: true
+    owner: unbound
+    group: unbound
+    mode: "0644"
+
+- name: Deploy unbound configuration
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: /etc/unbound/unbound.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "/usr/sbin/unbound-checkconf %s"
+  notify: Restart unbound
+
+- name: Ensure unbound is enabled and started
+  ansible.builtin.systemd:
+    name: unbound
+    enabled: true
+    state: started
+
+- name: Check if UFW is installed
+  ansible.builtin.command:
+    cmd: which ufw
+  register: ufw_check
+  changed_when: false
+  failed_when: false
+
+- name: Allow DNS through firewall (UFW)
+  community.general.ufw:
+    rule: allow
+    port: "53"
+    proto: "{{ dns_proto }}"
+    comment: "Unbound DNS"
+  loop:
+    - tcp
+    - udp
+  loop_control:
+    loop_var: dns_proto
+  when: ufw_check.rc == 0

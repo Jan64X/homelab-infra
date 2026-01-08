@@ -1,0 +1,71 @@
+---
+# Unbound DNS Server Defaults
+# These are fallback values - override in group_vars/all.yml under 'unbound:'
+
+unbound:
+  # Domain for local DNS records
+  domain: "domain.lan"
+
+  # TTL for local records (seconds)
+  ttl: 3600
+
+  # Performance tuning
+  num_threads: 2
+  msg_cache_size: "64m"
+  rrset_cache_size: "128m"
+  key_cache_size: "32m"
+  neg_cache_size: "16m"
+
+  # Cache TTL settings
+  cache_min_ttl: 300
+  cache_max_ttl: 86400
+
+  # Rate limiting (queries per second per client)
+  ip_ratelimit: 100
+
+  # Logging
+  verbosity: 1
+  log_queries: "no"
+
+  # Networks allowed to query (list of CIDR blocks)
+  access_control:
+    - cidr: "127.0.0.0/8"
+      comment: "Localhost"
+#    - cidr: "10.0.0.0/24"
+#     comment: "Main network"
+
+  # Upstream DNS servers (DNS-over-TLS)
+  upstream_servers:
+    # Quad9 (primary)
+    - addr: "9.9.9.9"
+      port: 853
+      name: "dns.quad9.net"
+    - addr: "149.112.112.112"
+      port: 853
+      name: "dns.quad9.net"
+    # Cloudflare (fallback)
+    - addr: "1.1.1.1"
+      port: 853
+      name: "cloudflare-dns.com"
+    - addr: "1.0.0.1"
+      port: 853
+      name: "cloudflare-dns.com"
+
+  # Aliases for inventory hosts (hostname -> list of additional names)
+  inventory_aliases: {}
+
+  # Manual DNS records for non-Ansible-managed devices
+  manual_records: []
+
+  # Inventory groups to include in auto-generation
+  inventory_groups:
+    - homelab
+
+  # Private networks (for DNS rebinding protection)
+  private_networks:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+    - "169.254.0.0/16"
+    - "fd00::/8"
+    - "fe80::/10"

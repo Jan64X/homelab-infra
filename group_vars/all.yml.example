@@ -38,3 +38,114 @@ external_monitor_smtp_from_address: "externalmonitor@example.com"
 external_monitor_smtp_from_name: "External Monitor"
 external_monitor_smtp_skip_verify: false
 external_monitor_alert_email: "destination@example.com"
+
+# ===========================================
+# UNBOUND DNS CONFIGURATION
+# ===========================================
+unbound:
+  # Domain for local DNS records
+  domain: "domain.lan"
+
+  # TTL for local records (seconds)
+  ttl: 3600
+
+  # Performance tuning
+  num_threads: 2
+  msg_cache_size: "64m"
+  rrset_cache_size: "128m"
+  key_cache_size: "32m"
+  neg_cache_size: "16m"
+  cache_min_ttl: 300
+  cache_max_ttl: 86400
+  ip_ratelimit: 100
+
+  # Logging
+  verbosity: 1
+  log_queries: "no"
+
+  # Inventory groups to auto-generate DNS records from
+  inventory_groups:
+    - homelab
+
+  # Networks allowed to query DNS
+  access_control:
+    - cidr: "10.0.0.0/24"
+      comment: "Main network"
+
+  # Upstream DNS servers (DNS-over-TLS)
+  upstream_servers:
+    # Quad9 (primary)
+    - addr: "9.9.9.9"
+      port: 853
+      name: "dns.quad9.net"
+    - addr: "149.112.112.112"
+      port: 853
+      name: "dns.quad9.net"
+    # Cloudflare (fallback)
+    - addr: "1.1.1.1"
+      port: 853
+      name: "cloudflare-dns.com"
+    - addr: "1.0.0.1"
+      port: 853
+      name: "cloudflare-dns.com"
+
+  # Private networks (for DNS rebinding protection)
+  private_networks:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+    - "169.254.0.0/16"
+    - "fd00::/8"
+    - "fe80::/10"
+
+  # Aliases for inventory hosts (auto-generated hosts get these extra names)
+  inventory_aliases:
+    nginx-gateway:
+      - nginx
+    searxng:
+      - search
+    navidrome:
+      - music
+    immich:
+      - photos
+    forgejo:
+      - git
+    observability:
+      - monitoring
+      - grafana
+      - prometheus
+    unificontroller:
+      - unifi
+    seedbox:
+      - torrent-down
+    unbound:
+      - dns
+      - dns-server
+    
+
+  # Manual DNS records for non-Ansible-managed devices
+  manual_records:
+    # Infrastructure
+    - name: router
+      ip: 10.0.0.x
+      aliases:
+        - mikrotik
+    - name: switch
+      ip: 10.0.0.x
+
+    # Servers/Hardware
+    - name: pve
+      ip: 10.0.0.x
+      aliases:
+        - proxmox
+    - name: nas
+      ip: 10.0.0.x
+      aliases:
+        - truenas
+
+    # PCs n' stuff
+    - name: desktop
+      ip: 10.0.0.x
+      aliases:
+        - workstation
+

@@ -41,3 +41,5 @@ ok: [forgejo]
 - figure out how to have a proper staging env
 
 - local nginx proxy for local services maybe?
+
+- unbound filter out clients so that only some clients can access internal domains

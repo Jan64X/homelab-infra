@@ -1,0 +1,241 @@
+# Unbound Configuration for {{ unbound.domain }}
+# Managed by Ansible - DO NOT EDIT MANUALLY
+#
+# Auto-generated records from inventory groups: {{ unbound.inventory_groups | join(', ') }}
+# Manual records: {{ unbound.manual_records | length }} entries
+
+server:
+    # ===========================================
+    # BASIC SERVER SETTINGS
+    # ===========================================
+
+    username: "unbound"
+    directory: "/etc/unbound"
+    chroot: ""
+
+    # Logging (uses syslog/journald)
+    verbosity: {{ unbound.verbosity }}
+    log-queries: {{ unbound.log_queries }}
+    log-replies: no
+    log-local-actions: yes
+    use-syslog: yes
+
+    # Performance tuning
+    num-threads: {{ unbound.num_threads }}
+    msg-cache-slabs: 4
+    rrset-cache-slabs: 4
+    infra-cache-slabs: 4
+    key-cache-slabs: 4
+
+    # Cache sizes
+    msg-cache-size: {{ unbound.msg_cache_size }}
+    rrset-cache-size: {{ unbound.rrset_cache_size }}
+    key-cache-size: {{ unbound.key_cache_size }}
+    neg-cache-size: {{ unbound.neg_cache_size }}
+
+    # Cache settings
+    cache-min-ttl: {{ unbound.cache_min_ttl }}
+    cache-max-ttl: {{ unbound.cache_max_ttl }}
+    cache-max-negative-ttl: 3600
+    prefetch: yes
+    prefetch-key: yes
+    serve-expired: yes
+    serve-expired-ttl: 86400
+
+    # ===========================================
+    # NETWORK INTERFACES
+    # ===========================================
+
+    interface: 0.0.0.0
+    interface: ::0
+    port: 53
+
+    do-ip4: yes
+    do-ip6: yes
+    do-udp: yes
+    do-tcp: yes
+    prefer-ip4: yes
+
+    # ===========================================
+    # ACCESS CONTROL
+    # ===========================================
+
+    # Deny by default
+    access-control: 0.0.0.0/0 refuse
+    access-control: ::0/0 refuse
+
+    # Allow localhost
+    access-control: 127.0.0.0/8 allow
+    access-control: ::1/128 allow
+
+{% for acl in unbound.access_control %}
+    # {{ acl.comment | default('') }}
+    access-control: {{ acl.cidr }} allow
+{% endfor %}
+
+    # ===========================================
+    # PRIVACY & SECURITY
+    # ===========================================
+
+    hide-identity: yes
+    hide-version: yes
+
+    # Harden against DNS attacks
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-referral-path: yes
+    harden-algo-downgrade: yes
+    harden-below-nxdomain: yes
+    harden-large-queries: yes
+
+    # Use 0x20-encoded random bits for poisoning resistance
+    use-caps-for-id: yes
+
+    # Qname minimisation for privacy
+    qname-minimisation: yes
+    qname-minimisation-strict: no
+
+    # Aggressive NSEC for DNSSEC
+    aggressive-nsec: yes
+
+    # DNSSEC validation
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    val-clean-additional: yes
+
+    # TLS certificate bundle for upstream DNS-over-TLS
+    tls-cert-bundle: "/etc/ssl/certs/ca-certificates.crt"
+
+    # Prevent amplification attacks
+    unwanted-reply-threshold: 10000
+
+    # Rate limiting
+    ip-ratelimit: {{ unbound.ip_ratelimit }}
+    ip-ratelimit-factor: 10
+
+    # ===========================================
+    # PRIVATE ADDRESSES & REBIND PROTECTION
+    # ===========================================
+
+{% for net in unbound.private_networks %}
+    private-address: {{ net }}
+{% endfor %}
+
+    # Allow our domain to resolve to private IPs
+    private-domain: "{{ unbound.domain }}"
+
+    # ===========================================
+    # LOCAL ZONE: {{ unbound.domain }}
+    # ===========================================
+
+    # Define {{ unbound.domain }} as authoritative local zone
+    local-zone: "{{ unbound.domain }}." typetransparent
+
+{% set all_records = [] %}
+{# Collect records from inventory hosts #}
+{% for group in unbound.inventory_groups %}
+{% if group in groups %}
+{% for host in groups[group] %}
+{% set host_ip = hostvars[host]['ansible_host'] %}
+{% set host_name = hostvars[host]['hostname'] | default(host) %}
+{% set _ = all_records.append({'name': host_name, 'ip': host_ip, 'source': 'inventory'}) %}
+{# Add aliases for this host #}
+{% if host in unbound.inventory_aliases %}
+{% for alias in unbound.inventory_aliases[host] %}
+{% set _ = all_records.append({'name': alias, 'ip': host_ip, 'source': 'inventory-alias'}) %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{# Collect manual records #}
+{% for record in unbound.manual_records %}
+{% set _ = all_records.append({'name': record.name, 'ip': record.ip, 'source': 'manual'}) %}
+{% if record.aliases is defined %}
+{% for alias in record.aliases %}
+{% set _ = all_records.append({'name': alias, 'ip': record.ip, 'source': 'manual-alias'}) %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+    # ---- Auto-generated from Ansible inventory ----
+{% for group in unbound.inventory_groups %}
+{% if group in groups %}
+{% for host in groups[group] %}
+{% set host_ip = hostvars[host]['ansible_host'] %}
+{% set host_name = hostvars[host]['hostname'] | default(host) %}
+    local-data: "{{ host_name }}.{{ unbound.domain }}. {{ unbound.ttl }} IN A {{ host_ip }}"
+{% if host in unbound.inventory_aliases %}
+{% for alias in unbound.inventory_aliases[host] %}
+    local-data: "{{ alias }}.{{ unbound.domain }}. {{ unbound.ttl }} IN A {{ host_ip }}"
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if unbound.manual_records | length > 0 %}
+    # ---- Manual records ----
+{% for record in unbound.manual_records %}
+    local-data: "{{ record.name }}.{{ unbound.domain }}. {{ unbound.ttl }} IN A {{ record.ip }}"
+{% if record.aliases is defined %}
+{% for alias in record.aliases %}
+    local-data: "{{ alias }}.{{ unbound.domain }}. {{ unbound.ttl }} IN A {{ record.ip }}"
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+    # ===========================================
+    # PTR RECORDS (Reverse DNS)
+    # ===========================================
+
+{% set reverse_zones = [] %}
+{% for record in all_records %}
+{% set octets = record.ip.split('.') %}
+{% set zone = octets[2] ~ '.' ~ octets[1] ~ '.' ~ octets[0] ~ '.in-addr.arpa.' %}
+{% if zone not in reverse_zones %}
+{% set _ = reverse_zones.append(zone) %}
+{% endif %}
+{% endfor %}
+
+{% for zone in reverse_zones %}
+    local-zone: "{{ zone }}" nodefault
+{% endfor %}
+
+{# Generate PTR records - use first name for each IP #}
+{% set ptr_records = {} %}
+{% for record in all_records %}
+{% if record.ip not in ptr_records %}
+{% set _ = ptr_records.update({record.ip: record.name}) %}
+{% endif %}
+{% endfor %}
+
+{% for ip, name in ptr_records.items() %}
+    local-data-ptr: "{{ ip }} {{ name }}.{{ unbound.domain }}."
+{% endfor %}
+
+# ===========================================
+# UPSTREAM: DNS-over-TLS
+# ===========================================
+
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+
+{% for server in unbound.upstream_servers %}
+    forward-addr: {{ server.addr }}@{{ server.port }}#{{ server.name }}
+{% endfor %}
+
+# ===========================================
+# REMOTE CONTROL (for unbound-control)
+# ===========================================
+
+remote-control:
+    control-enable: yes
+    control-interface: 127.0.0.1
+    control-port: 8953
+    server-key-file: "/etc/unbound/unbound_server.key"
+    server-cert-file: "/etc/unbound/unbound_server.pem"
+    control-key-file: "/etc/unbound/unbound_control.key"
+    control-cert-file: "/etc/unbound/unbound_control.pem"
