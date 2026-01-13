@@ -4,7 +4,7 @@
 # 1. Install Ansible Tools (Needs Sudo for global install)
 # We use sudo so these are available globally - TODO: check if there's a better way
 echo "Installing Ansible dependencies..."
-sudo pip install --no-cache-dir ansible-lint mitogen
+sudo pip install --no-cache-dir ansible-lint mitogen passlib
 
 # 2. Install Ansible Galaxy Collections
 # These install to ~/.ansible, which belongs to the 'vscode' user
