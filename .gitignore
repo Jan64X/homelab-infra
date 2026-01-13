@@ -24,3 +24,8 @@ inventory/hosts.yml
 
 # Ignore .ansible
 .ansible/
+
+# Ignore AI slop (idk there's probably more but these are the ones I know of)
+.claude/
+.cursorrules/
+.github/

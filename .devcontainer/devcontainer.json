@@ -1,0 +1,51 @@
+{
+  "name": "Ansible Homelab",
+  "image": "willhallonline/ansible:2.18-debian-bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "configureZshAsDefaultShell": true,
+      "upgradePackages": true,
+      "username": "vscode",
+      "userUid": "1000",
+      "userGid": "1000"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "redhat.ansible",
+        "redhat.vscode-yaml",
+        "eamodio.gitlens",
+        "mhutchie.git-graph"
+      ],
+      "settings": {
+        "ansible.python.interpreterPath": "/usr/bin/python3",
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    }
+  },
+
+  "mounts": [
+    "source=${localWorkspaceFolder}/credentials,target=/workspace/credentials,type=bind,consistency=cached"
+  ],
+
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": "${localEnv:SSH_AUTH_SOCK}"
+  },
+
+  // Runs as the 'vscode' user
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+
+  "runArgs": ["--network=host"],
+
+  // Switch to the non-root user (maybe there could be problems with uid/gid if your host user is not 1000)
+  "remoteUser": "vscode"
+}
