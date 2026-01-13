@@ -1,0 +1,6 @@
+---
+# Promtail version to install
+promtail_version: "3.6.3"
+
+# Loki endpoint (observability host)
+promtail_loki_url: "http://{{ hostvars['observability']['ansible_host'] }}:3100/loki/api/v1/push"

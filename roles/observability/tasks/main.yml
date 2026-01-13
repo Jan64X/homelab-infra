@@ -126,6 +126,7 @@
   loop:
     - /etc/monitoring
     - /etc/monitoring/prometheus
+    - /etc/monitoring/loki
     - /etc/monitoring/grafana
     - /etc/monitoring/grafana/dashboards
     - /etc/monitoring/grafana/provisioning
@@ -133,6 +134,7 @@
     - /etc/monitoring/grafana/provisioning/datasources
     - /var/lib/prometheus
     - /var/lib/grafana
+    - /var/lib/loki
   loop_control:
     loop_var: directory_item
   become: true
@@ -150,6 +152,14 @@
     path: /var/lib/prometheus
     owner: 65534
     group: 65534
+    recurse: true
+  become: true
+
+- name: Set ownership for Loki directory
+  ansible.builtin.file:
+    path: /var/lib/loki
+    owner: 10001
+    group: 10001
     recurse: true
   become: true
 
@@ -220,6 +230,13 @@
     mode: '0644'
   become: true
 
+- name: Configure Loki
+  ansible.builtin.template:
+    src: loki-config.yml.j2
+    dest: /etc/monitoring/loki/loki-config.yml
+    mode: '0644'
+  become: true
+
 - name: Configure Grafana datasource
   ansible.builtin.template:
     src: datasource.yml.j2
@@ -261,6 +278,12 @@
 - name: Wait for Grafana to be ready
   ansible.builtin.wait_for:
     port: 80
+    delay: 10
+    timeout: 120
+
+- name: Wait for Loki to be ready
+  ansible.builtin.wait_for:
+    port: 3100
     delay: 10
     timeout: 120
 
@@ -306,6 +329,25 @@
     - observability_backup_found
     - not (observability_force_fresh | default(false))
 
+- name: Restore Loki data from Restic
+  ansible.builtin.shell: |
+    source /etc/monitoring/restic-env.sh
+    cd /etc/monitoring
+    docker compose down
+    restic restore latest --tag observability-loki --target / --insecure-tls
+    chown -R 10001:10001 /var/lib/loki
+    docker compose up -d
+  args:
+    executable: /bin/bash
+  become: true
+  register: observability_loki_restore_result
+  changed_when: observability_loki_restore_result.rc == 0
+  failed_when: observability_loki_restore_result.rc != 0
+  when:
+    - observability_is_fresh_install
+    - observability_backup_found
+    - not (observability_force_fresh | default(false))
+
 - name: Wait for services after restore
   ansible.builtin.wait_for:
     port: "{{ item }}"
@@ -314,6 +356,7 @@
   loop:
     - 9090
     - 80
+    - 3100
   when:
     - observability_is_fresh_install
     - observability_backup_found
@@ -398,6 +441,26 @@
     proto: tcp
   notify: Reload ufw
 
+- name: Get promtail host IPs
+  ansible.builtin.set_fact:
+    observability_promtail_ips: >-
+      {{ groups['all'] |
+      map('extract', hostvars) |
+      selectattr('host_roles', 'defined') |
+      selectattr('host_roles', 'contains', 'promtail-hl') |
+      map(attribute='ansible_host') |
+      list }}
+
+- name: Allow Loki from promtail hosts
+  community.general.ufw:
+    rule: allow
+    port: 3100
+    proto: tcp
+    from_ip: "{{ item }}"
+  loop: "{{ observability_promtail_ips }}"
+  when: observability_promtail_ips | length > 0
+  notify: Reload ufw
+
 # =============================================================================
 # FIRST RUN INSTRUCTIONS
 # =============================================================================
@@ -409,19 +472,20 @@
       Observability stack installation complete!
 
       {% if observability_is_fresh_install and observability_backup_found %}
-      ✓ Restored from Restic backup
-      Your Prometheus and Grafana instances should be ready with all previous data.
+      Restored from Restic backup
+      Your Prometheus, Grafana, and Loki instances should be ready with all previous data.
       {% elif observability_is_fresh_install %}
-      ⚠ Fresh installation - no backup found to restore
+      Fresh installation - no backup found to restore
       Access Grafana at: http://{{ ansible_host }}
       Username: admin
       Password: {{ observability_grafana_admin_password }}
       {% else %}
-      ✓ Existing installation updated
+      Existing installation updated
       {% endif %}
 
       Grafana: http://{{ ansible_host }}
       Prometheus: http://{{ ansible_host }}:9090
+      Loki: http://{{ ansible_host }}:3100
       ===================================================================
   when: >-
     observability_is_fresh_install or

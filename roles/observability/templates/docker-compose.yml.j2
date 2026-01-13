@@ -1,4 +1,26 @@
 services:
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    user: "10001:10001"
+    ports:
+      - "0.0.0.0:3100:3100"
+    volumes:
+      - /etc/monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - /var/lib/loki:/loki
+      - /etc/localtime:/etc/localtime:ro
+    command:
+      - '-config.file=/etc/loki/local-config.yaml'
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -45,7 +67,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-polystat-panel
       - GF_METRICS_ENABLED=true
-      - GF_SERVER_ROOT_URL=http://monitoring.core.lan:80
+      - GF_SERVER_ROOT_URL=http://monitoring.telvos.net:80
       - GF_SECURITY_ADMIN_USER=admin
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
@@ -63,6 +85,7 @@ services:
       - monitoring
     depends_on:
       - prometheus
+      - loki
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
       interval: 30s
