@@ -1,0 +1,13 @@
+[Unit]
+Description=Wait for NAS to be available
+Before=mnt-torrents.mount
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'until nc -zw3 {{ nas_ip }} 445; do sleep 2; done'
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

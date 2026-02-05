@@ -1,0 +1,363 @@
+---
+- name: Install required packages for Docker repository
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - cifs-utils
+      - netcat-openbsd
+      - python3
+    state: present
+    update_cache: true
+
+- name: Create directory for Docker GPG key
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Add Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+
+- name: Set Docker GPG key permissions
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Get system architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: seedbox_system_arch
+  changed_when: false
+
+- name: Add Docker repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ seedbox_system_arch.stdout }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/debian
+      {{ ansible_facts['distribution_release'] }} stable
+    state: present
+    filename: docker
+
+- name: Install Docker and Docker Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker service is running
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Ensure credentials directory exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Check if initial setup is complete on remote machine
+  ansible.builtin.stat:
+    path: /etc/seedbox_setup_complete.flag
+  register: seedbox_setup_complete_check
+
+- name: Generate credentials on first boot only
+  when: not seedbox_setup_complete_check.stat.exists
+  block:
+    - name: Generate/get initial password
+      ansible.builtin.set_fact:
+        seedbox_initial_password: >-
+          {{ lookup('ansible.builtin.password',
+          playbook_dir + '/credentials/hosts/' + inventory_hostname +
+          '/initial_password.txt chars=ascii_letters,digits,!@#$%^&*() length=16') }}
+
+    - name: Generate salt for qBittorrent hash
+      ansible.builtin.set_fact:
+        seedbox_qbittorrent_salt: >-
+          {{ lookup('ansible.builtin.password',
+          '/dev/null chars=ascii_letters,digits length=16') }}
+
+    - name: Generate qBittorrent password hash
+      ansible.builtin.shell: |
+        python3 -c "
+        import base64, hashlib;
+        password = '{{ seedbox_initial_password }}';
+        salt = '{{ seedbox_qbittorrent_salt }}'.encode('utf-8');
+        salt_b64 = base64.b64encode(salt).decode('utf-8');
+        key = hashlib.pbkdf2_hmac('sha512', password.encode('utf-8'), salt, 100000, 64);
+        key_b64 = base64.b64encode(key).decode('utf-8');
+        print(f'@ByteArray({salt_b64}:{key_b64})');
+        "
+      register: seedbox_qbittorrent_hash_result
+      changed_when: false
+
+    - name: Set qBittorrent password hash fact
+      ansible.builtin.set_fact:
+        seedbox_qbittorrent_password_hash: "{{ seedbox_qbittorrent_hash_result.stdout }}"
+
+    - name: Display initial credentials
+      ansible.builtin.debug:
+        msg:
+          - "=== INITIAL SETUP - GENERATING CREDENTIALS ==="
+          - "Generated initial password: {{ seedbox_initial_password }}"
+          - "This password will be used for qBittorrent web interface"
+          - "Password saved to: {{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}/initial_password.txt"
+          - "================================================"
+
+- name: Skip credential generation (setup already complete)
+  when: seedbox_setup_complete_check.stat.exists
+  block:
+    - name: Get existing password
+      ansible.builtin.set_fact:
+        seedbox_initial_password: >-
+          {{ lookup('file',
+          playbook_dir + '/credentials/hosts/' + inventory_hostname + '/initial_password.txt') }}
+
+    - name: Generate salt for qBittorrent hash
+      ansible.builtin.set_fact:
+        seedbox_qbittorrent_salt: >-
+          {{ lookup('ansible.builtin.password',
+          '/dev/null chars=ascii_letters,digits length=16') }}
+
+    - name: Generate qBittorrent password hash from existing password
+      ansible.builtin.shell: |
+        python3 -c "
+        import base64, hashlib;
+        password = '{{ seedbox_initial_password }}';
+        salt = '{{ seedbox_qbittorrent_salt }}'.encode('utf-8');
+        salt_b64 = base64.b64encode(salt).decode('utf-8');
+        key = hashlib.pbkdf2_hmac('sha512', password.encode('utf-8'), salt, 100000, 64);
+        key_b64 = base64.b64encode(key).decode('utf-8');
+        print(f'@ByteArray({salt_b64}:{key_b64})');
+        "
+      register: seedbox_qbittorrent_hash_result
+      changed_when: false
+
+    - name: Set qBittorrent password hash fact
+      ansible.builtin.set_fact:
+        seedbox_qbittorrent_password_hash: "{{ seedbox_qbittorrent_hash_result.stdout }}"
+
+    - name: Skip credential generation message
+      ansible.builtin.debug:
+        msg:
+          - "=== SETUP ALREADY COMPLETE ==="
+          - "Using existing configuration on remote machine"
+          - "Initial password: {{ seedbox_initial_password }}"
+          - "Users should manage passwords through web interface"
+          - "==============================="
+
+- name: Create seedbox application directory
+  ansible.builtin.file:
+    path: /opt/seedbox
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create seedbox subdirectories
+  ansible.builtin.file:
+    path: "{{ directory }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - /opt/seedbox/gluetun
+    - /opt/seedbox/qbittorrent
+    - /opt/seedbox/qbittorrent/config
+    - /opt/seedbox/qbittorrent/config/qBittorrent
+    - /opt/seedbox/nginx
+  loop_control:
+    loop_var: directory
+
+- name: Check if NAS mount point directory exists
+  ansible.builtin.stat:
+    path: /mnt/torrents
+  register: seedbox_nas_mount_point
+
+- name: Create NAS mount point directory
+  ansible.builtin.file:
+    path: /mnt/torrents
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: not seedbox_nas_mount_point.stat.exists
+
+- name: Check if incomplete torrents directory exists
+  ansible.builtin.stat:
+    path: /mnt/torrents/incomplete
+  register: seedbox_incomplete_dir
+
+- name: Create incomplete torrents directory
+  ansible.builtin.file:
+    path: /mnt/torrents/incomplete
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: not seedbox_incomplete_dir.stat.exists
+
+- name: Create systemd NAS credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ seedbox_nas_user }}
+      password={{ seedbox_nas_password }}
+    dest: /etc/seedbox-nas-credentials
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Create systemd mount unit for NAS
+  ansible.builtin.template:
+    src: mnt-torrents.mount.j2
+    dest: /etc/systemd/system/mnt-torrents.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start NAS mount
+  ansible.builtin.systemd:
+    name: mnt-torrents.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for mount to be ready
+  ansible.builtin.wait_for:
+    path: /mnt/torrents
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify torrents directory is accessible
+  ansible.builtin.command: ls -A /mnt/torrents
+  register: seedbox_mount_check
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Create docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/seedbox/docker-compose.yml
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create .env file
+  ansible.builtin.template:
+    src: env.j2
+    dest: /opt/seedbox/.env
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Create nginx configuration
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /opt/seedbox/nginx/nginx.conf
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create seedbox systemd service
+  ansible.builtin.template:
+    src: seedbox.service.j2
+    dest: /etc/systemd/system/seedbox.service
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Create qBittorrent config file (first boot only)
+  ansible.builtin.template:
+    src: qBittorrent.conf.j2
+    dest: /opt/seedbox/qbittorrent/config/qBittorrent/qBittorrent.conf
+    mode: '0644'
+    owner: root
+    group: root
+  when: not seedbox_setup_complete_check.stat.exists
+
+- name: Enable and start seedbox service
+  ansible.builtin.systemd:
+    name: seedbox.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Mark initial setup as complete on remote machine
+  ansible.builtin.copy:
+    content: |
+      # Initial seedbox setup completed on {{ ansible_facts['date_time']['iso8601'] }}
+      # Password management is now handled by users through the qBittorrent web interface
+      # Do not delete this file - it prevents configuration regeneration
+      # Generated by Ansible from {{ ansible_facts['hostname'] }}
+    dest: /etc/seedbox_setup_complete.flag
+    mode: '0644'
+    owner: root
+    group: root
+  when: not seedbox_setup_complete_check.stat.exists
+
+- name: Allow HTTP port for qBittorrent WebUI through firewall
+  community.general.ufw:
+    rule: allow
+    port: 80
+    proto: tcp
+  notify: Reload ufw
+
+- name: Final setup summary
+  ansible.builtin.debug:
+    msg:
+      - "=== SEEDBOX SETUP COMPLETE ==="
+      - "qBittorrent WebUI: http://{{ ansible_facts['default_ipv4']['address'] }}:80"
+      - >
+        {% if not seedbox_setup_complete_check.stat.exists %}
+        Initial password: {{ seedbox_initial_password }}
+        {% else %}
+        Initial password stored locally in credentials directory
+        {% endif %}
+      - "Username: admin"
+      - "Using VueTorrent WebUI (alternative interface)"
+      - "All torrent traffic is routed through WireGuard VPN"
+      - "Users can change passwords through the web interface"
+      - "Future playbook runs will not modify user configurations"
+      - "==============================="
