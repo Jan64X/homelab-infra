@@ -1,7 +1,14 @@
 ---
 # Homelab Configuration
 # SSH key for all homelab hosts
-sysadmin_ssh_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_homelab.pub') }}"
+# Can be a single key or a list of keys (e.g., for primary + backup keys)
+sysadmin_ssh_keys:
+  - "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_homelab.pub') }}"
+  # Optional: uncomment to add backup key
+  # - "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_homelab-backup.pub') }}"
+
+# Backward compatibility: sysadmin_ssh_key for roles that expect a single key
+sysadmin_ssh_key: "{{ sysadmin_ssh_keys | join('\n') }}"
 
 # Base domain for all services (change this to your domain)
 base_domain: example.com
@@ -16,21 +23,21 @@ certbot_email: "admin@example.com"
 # Nginx virtual hosts to configure
 # Each entry corresponds to a template file: templates/<name>.conf.j2
 nginx_vhosts:
-  - search
-  - forgejo
-  - base_domain
-  - sharkey
-  - filescdn
+- search
+- forgejo
+- base_domain
+- sharkey
+- filescdn
 #  - gitlab
 
 # Service port mappings (ports exposed by each service)
 # Adjust these if your services use different ports
 service_ports:
-  search: 8080       # SearXNG default port
-  gitlab: 80         # GitLab HTTP port
-  sharkey: 3000      # Sharkey/Misskey default port
-  filescdn: 8080     # File CDN service port
-  forgejo: 3000     # Forgejo default port
+  search: 8080 # SearXNG default port
+  gitlab: 80 # GitLab HTTP port
+  sharkey: 3000 # Sharkey/Misskey default port
+  filescdn: 8080 # File CDN service port
+  forgejo: 3000 # Forgejo default port
 
 # Services configuration
 # These use hostvars to automatically pull backend IPs from inventory/hosts.yml
@@ -64,8 +71,8 @@ gitlab_force_fresh_install: false
 forgejo_force_restore: false
 forgejo_force_fresh_install: false
 
-# monitoring - observability role with prometheus and grafana
-monitoring_force_fresh_install: false
+# observability - monitoring role with prometheus and grafana
+observability_force_fresh: false
 
 # immich backup restoration settings, set to true to force a fresh install
 immich_force_restore: false
@@ -136,3 +143,20 @@ filescdn_files_share: "//{{ nas_ip }}/tank/Server/filescdn"
 immich_nas_user: "someuser"
 immich_nas_password: "placeholder"
 immich_photos_share: "//{{ nas_ip }}/tank/Server/immich"
+
+# seedbox - Windscribe WireGuard VPN configuration
+# Get your credentials from Windscribe (same for all servers):
+# - WIREGUARD_PRIVATE_KEY: Your 32 bytes key in base64 format
+# - WIREGUARD_ADDRESSES: Your IP network interface address (format: xx.xx.xx.xx/xx)
+# - WIREGUARD_PRESHARED_KEY: Your preshared key (can be empty string)
+# - SERVER_REGIONS: Comma-separated list of regions (e.g., "Netherlands" or "Sweden,Italy")
+seedbox_windscribe:
+  private_key: "your_private_key_here" # Your Windscribe WireGuard private key
+  addresses: "100.xx.xx.xx/32" # Your Windscribe WireGuard address
+  preshared_key: "your_preshared_key_here" # Your Windscribe WireGuard preshared key (can be empty)
+  server_regions: "Netherlands" # Comma-separated list of server regions
+
+# seedbox - NAS mount configuration
+seedbox_nas_user: "someuser"
+seedbox_nas_password: "placeholder"
+seedbox_nas_share: "//{{ nas_ip }}/torrents"

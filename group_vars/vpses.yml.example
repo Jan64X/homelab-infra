@@ -1,4 +1,11 @@
 ---
 # VPS Configuration
 # SSH key for VPS hosts (could be different from homelab)
-sysadmin_ssh_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_vpses.pub') }}"
+# Can be a single key or a list of keys (e.g., for primary + backup keys)
+sysadmin_ssh_keys:
+  - "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_vpses.pub') }}"
+  # Optional: uncomment to add backup key
+  # - "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_vpses-backup.pub') }}"
+
+# Backward compatibility: sysadmin_ssh_key for roles that expect a single key
+sysadmin_ssh_key: "{{ sysadmin_ssh_keys | join('\n') }}"

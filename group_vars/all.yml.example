@@ -114,6 +114,7 @@ unbound:
       - monitoring
       - grafana
       - prometheus
+      - loki
     unificontroller:
       - unifi
     seedbox:
@@ -127,7 +128,7 @@ unbound:
   manual_records:
     # Infrastructure
     - name: router
-      ip: 10.0.0.x
+      ip: 10.0.0.1
       aliases:
         - mikrotik
     - name: switch
@@ -138,6 +139,8 @@ unbound:
       ip: 10.0.0.x
       aliases:
         - proxmox
+    - name: idrac
+      ip: 10.0.0.x
     - name: nas
       ip: 10.0.0.x
       aliases:
@@ -147,5 +150,16 @@ unbound:
     - name: desktop
       ip: 10.0.0.x
       aliases:
+        - gaming-pc
+        - jan-pc
         - workstation
+    - name: laptop
+      ip: 10.0.0.x
+      aliases:
+        - t480
+    - name: pinenote
+      ip: 10.0.0.x
+    - name: phone
+      ip: 10.0.0.x
+
 
