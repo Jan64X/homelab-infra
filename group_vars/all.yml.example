@@ -17,9 +17,9 @@ ssh_port: 22
 # Ansible User SSH Key (same for all hosts)
 ansible_ssh_public_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/ansible_admin.pub') }}"
 
-# Home public IP for VPS prometheus exporter firewall whitelist
-# Replace with your actual home/office IP
-home_public_ip: "203.0.113.1"
+# VPS public IP — for firewall rules allowing external-monitor to probe homelab
+# This is the IP of the VPS running the external-monitor (managed in public-infra repo)
+vps_public_ip: "x.x.x.x"
 
 # Grafana SMTP Configuration
 grafana_smtp_enabled: false
@@ -29,15 +29,6 @@ grafana_smtp_password: "mysecret"
 grafana_smtp_from_address: "grafana@example.com"
 grafana_smtp_from_name: "Grafana"
 grafana_smtp_skip_verify: false
-
-# External monitor SMTP configuration
-external_monitor_smtp_host: "smtp.example.com:587" # Alert Manager requires starttls on port 587 and doesn't cooperate with SMTPS on 465
-external_monitor_smtp_user: "externalmonitor@example.com"
-external_monitor_smtp_password: "mysecret"
-external_monitor_smtp_from_address: "externalmonitor@example.com"
-external_monitor_smtp_from_name: "External Monitor"
-external_monitor_smtp_skip_verify: false
-external_monitor_alert_email: "destination@example.com"
 
 # ===========================================
 # UNBOUND DNS CONFIGURATION
@@ -100,16 +91,10 @@ unbound:
 
   # Aliases for inventory hosts (auto-generated hosts get these extra names)
   inventory_aliases:
-    nginx-gateway:
-      - nginx
-    searxng:
-      - search
     navidrome:
       - music
     immich:
       - photos
-    forgejo:
-      - git
     observability:
       - monitoring
       - grafana

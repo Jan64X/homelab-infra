@@ -12,7 +12,6 @@ credentials/hosts/*
 # Ignore actual configuration files but allow examples
 group_vars/all.yml
 group_vars/homelab.yml
-group_vars/vpses.yml
 inventory/hosts.yml
 
 # Keep example files
@@ -28,4 +27,7 @@ inventory/hosts.yml
 # Ignore AI slop (idk there's probably more but these are the ones I know of)
 .claude/
 .cursorrules/
+
+# Ignore public-infra repo (separate repository)
+public-infra/
 .github/

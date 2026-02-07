@@ -1,7 +1,0 @@
----
-# Sharkey role default variables
-sharkey_fresh_install: false
-
-# Restore configuration
-# Set to true to skip automatic restore from backup on fresh install
-sharkey_force_fresh: false

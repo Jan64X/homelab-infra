@@ -5,9 +5,6 @@ This guide covers setting up MinIO S3-compatible storage for Restic backups with
 ## Supported Services
 
 This configuration works for the following services:
-- **Forgejo** - Git hosting platform
-- **Sharkey** - Fediverse social media server
-- **GitLab** - DevOps platform with CI/CD
 - **UniFi Controller** - Network management platform
 - **Navidrome** - Music streaming server
 - **Observability** - Prometheus and Grafana monitoring stack
@@ -29,9 +26,6 @@ mc alias set myminio http://<NAS_IP>:9000 root_user root_password
 Create separate buckets for each service:
 
 ```bash
-mc mb myminio/forgejo-backups
-mc mb myminio/sharkey-backups
-mc mb myminio/gitlab-backups
 mc mb myminio/unifi-backups
 mc mb myminio/navidrome-backups
 mc mb myminio/observability-backups
@@ -40,9 +34,6 @@ mc mb myminio/observability-backups
 ### 3. Apply the Service-Specific Policies
 
 Each service has its own append-only policy file in this directory that restricts DeleteObject to the locks/ directory only:
-- `forgejo-restic-policy.json`
-- `sharkey-restic-policy.json`
-- `gitlab-restic-policy.json`
 - `unificontroller-restic-policy.json`
 - `navidrome-restic-policy.json`
 - `observability-restic-policy.json`
@@ -50,9 +41,6 @@ Each service has its own append-only policy file in this directory that restrict
 Apply each policy to MinIO:
 
 ```bash
-mc admin policy create myminio forgejo-restic-policy forgejo-restic-policy.json
-mc admin policy create myminio sharkey-restic-policy sharkey-restic-policy.json
-mc admin policy create myminio gitlab-restic-policy gitlab-restic-policy.json
 mc admin policy create myminio unificontroller-restic-policy unificontroller-restic-policy.json
 mc admin policy create myminio navidrome-restic-policy navidrome-restic-policy.json
 mc admin policy create myminio observability-restic-policy observability-restic-policy.json
@@ -61,28 +49,6 @@ mc admin policy create myminio observability-restic-policy observability-restic-
 ### 4. Create the Service Users
 
 Create separate users for each service and attach the appropriate policies.
-
-#### Forgejo User
-
-```bash
-# TIP: The username acts as the Access Key, and the password acts as the Secret Key.
-mc admin user add myminio forgejo-user <STRONG_RANDOM_PASSWORD>
-mc admin policy attach myminio forgejo-restic-policy --user forgejo-user
-```
-
-#### Sharkey User
-
-```bash
-mc admin user add myminio sharkey-user <STRONG_RANDOM_PASSWORD>
-mc admin policy attach myminio sharkey-restic-policy --user sharkey-user
-```
-
-#### GitLab User
-
-```bash
-mc admin user add myminio gitlab-user <STRONG_RANDOM_PASSWORD>
-mc admin policy attach myminio gitlab-restic-policy --user gitlab-user
-```
 
 #### UniFi Controller User
 
@@ -111,19 +77,7 @@ For each service, you have two options for Ansible variables:
 
 #### Option A: Use the User Credentials (Simplest)
 
-**Forgejo:**
-- Access Key: `forgejo-user`
-- Secret Key: The `<STRONG_RANDOM_PASSWORD>` you set above
-
-**Sharkey:**
-- Access Key: `sharkey-user`
-- Secret Key: The `<STRONG_RANDOM_PASSWORD>` you set above
-
-**GitLab:**
-- Access Key: `gitlab-user`
-- Secret Key: The `<STRONG_RANDOM_PASSWORD>` you set above
-
-**UniFi Controller:**
+**UniFi Controller:****
 - Access Key: `unifi-user`
 - Secret Key: The `<STRONG_RANDOM_PASSWORD>` you set above
 
@@ -136,41 +90,11 @@ Update `group_vars/homelab.yml`:
 ```yaml
 # MinIO/S3 Configuration
 minio_endpoint: "https://nas.core.lan:9000"
-
-# Forgejo backup credentials
-minio_forgejo_bucket: "forgejo-backups"
-minio_forgejo_access_key: "forgejo-user"
-minio_forgejo_secret_key: "your-forgejo-password-here"
-
-# Sharkey backup credentials
-minio_sharkey_bucket: "sharkey-backups"
-minio_sharkey_access_key: "sharkey-user"
-minio_sharkey_secret_key: "your-sharkey-password-here"
-
-# GitLab backup credentials
-minio_gitlab_bucket: "gitlab-backups"
-minio_gitlab_access_key: "gitlab-user"
-minio_gitlab_secret_key: "your-gitlab-password-here"
 ```
 
 #### Option B: Generate Dedicated Service Accounts (Best Practice)
 
 This creates random credential pairs tied to each user so you don't expose the main passwords.
-
-**For Forgejo:**
-```bash
-mc admin user svcacct add myminio forgejo-user
-```
-
-**For Sharkey:**
-```bash
-mc admin user svcacct add myminio sharkey-user
-```
-
-**For GitLab:**
-```bash
-mc admin user svcacct add myminio gitlab-user
-```
 
 Output will look like:
 
@@ -185,37 +109,13 @@ Use these values in your Ansible `group_vars/homelab.yml`.
 
 Since the VMs cannot delete old data (append-only policy), you must run pruning from a secure admin machine (e.g., TrueNAS Cron or Admin PC) periodically (e.g., weekly).
 
-#### Forgejo Maintenance
+#### Pruning Example
 
 ```bash
 export AWS_ACCESS_KEY_ID="root_user"
 export AWS_SECRET_ACCESS_KEY="root_password"
-export RESTIC_REPOSITORY="s3:http://<NAS_IP>:9000/forgejo-backups"
-export RESTIC_PASSWORD="<FORGEJO_RESTIC_REPO_PASSWORD>"
-
-# This cleans up snapshots older than X days and removes the actual S3 objects
-restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune
-```
-
-#### Sharkey Maintenance
-
-```bash
-export AWS_ACCESS_KEY_ID="root_user"
-export AWS_SECRET_ACCESS_KEY="root_password"
-export RESTIC_REPOSITORY="s3:http://<NAS_IP>:9000/sharkey-backups"
-export RESTIC_PASSWORD="<SHARKEY_RESTIC_REPO_PASSWORD>"
-
-# This cleans up snapshots older than X days and removes the actual S3 objects
-restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune
-```
-
-#### GitLab Maintenance
-
-```bash
-export AWS_ACCESS_KEY_ID="root_user"
-export AWS_SECRET_ACCESS_KEY="root_password"
-export RESTIC_REPOSITORY="s3:http://<NAS_IP>:9000/gitlab-backups"
-export RESTIC_PASSWORD="<GITLAB_RESTIC_REPO_PASSWORD>"
+export RESTIC_REPOSITORY="s3:http://<NAS_IP>:9000/<service>-backups"
+export RESTIC_PASSWORD="<RESTIC_REPO_PASSWORD>"
 
 # This cleans up snapshots older than X days and removes the actual S3 objects
 restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune
@@ -239,7 +139,7 @@ Test connectivity from the VM:
 
 ```bash
 # Source the restic environment (on the managed host)
-source /opt/forgejo/restic-env.sh  # or /opt/sharkey/restic-env.sh or /opt/gitlab/restic-env.sh
+source /opt/<service>/restic-env.sh
 restic snapshots
 ```
 
@@ -254,6 +154,6 @@ If you see "Access Denied" errors:
 
 ```bash
 # Initialize the repository (should happen automatically via Ansible)
-source /opt/forgejo/restic-env.sh  # or appropriate service path
+source /opt/<service>/restic-env.sh
 restic init --insecure-tls
 ```

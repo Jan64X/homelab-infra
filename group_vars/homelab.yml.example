@@ -10,66 +10,8 @@ sysadmin_ssh_keys:
 # Backward compatibility: sysadmin_ssh_key for roles that expect a single key
 sysadmin_ssh_key: "{{ sysadmin_ssh_keys | join('\n') }}"
 
-# Base domain for all services (change this to your domain)
-base_domain: example.com
-
-# Nginx Configuration for public-facing servers
-ssl_enabled: true
-cloudflare_enabled: true      # Set to false if not using Cloudflare
-domain_name: "{{ base_domain }}"
-cloudflare_api_token: "yourkeyhere"
-certbot_email: "admin@example.com"
-
-# Nginx virtual hosts to configure
-# Each entry corresponds to a template file: templates/<name>.conf.j2
-nginx_vhosts:
-- search
-- forgejo
-- base_domain
-- sharkey
-- filescdn
-#  - gitlab
-
-# Service port mappings (ports exposed by each service)
-# Adjust these if your services use different ports
-service_ports:
-  search: 8080 # SearXNG default port
-  gitlab: 80 # GitLab HTTP port
-  sharkey: 3000 # Sharkey/Misskey default port
-  filescdn: 8080 # File CDN service port
-  forgejo: 3000 # Forgejo default port
-
-# Services configuration
-# These use hostvars to automatically pull backend IPs from inventory/hosts.yml
-# gitlab commented out, if you want to use it then uncomment it then comment out forgejo
-services:
-  search:
-    domain: "search.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['searxng']['ansible_host'] }}:{{ service_ports.search }}"
-#  gitlab:
-#    domain: "git.{{ base_domain }}"
-#    backend_server: "http://{{ hostvars['gitlab']['ansible_host'] }}:{{ service_ports.gitlab }}"
-  sharkey:
-    domain: "fedi.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['sharkey']['ansible_host'] }}:{{ service_ports.sharkey }}"
-  filescdn:
-    domain: "cdn.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['filescdn']['ansible_host'] }}:{{ service_ports.filescdn }}"
-  forgejo:
-    domain: "git.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['forgejo']['ansible_host'] }}:{{ service_ports.forgejo }}"
-
-# Service base URLs (used by various roles)
-searxng_base_url: "https://search.{{ base_domain }}"
-sharkey_base_url: "https://fedi.{{ base_domain }}"
-
-# GitLab configuration (homelab specific)
-gitlab_force_restore: false
-gitlab_force_fresh_install: false
-
-# Forgejo-specific settings (optional)
-forgejo_force_restore: false
-forgejo_force_fresh_install: false
+# NAS IP address (adjust to your network)
+nas_ip: "x.x.x.x"
 
 # observability - monitoring role with prometheus and grafana
 observability_force_fresh: false
@@ -77,39 +19,10 @@ observability_force_fresh: false
 # immich backup restoration settings, set to true to force a fresh install
 immich_force_restore: false
 
-# Set to true to skip automatic restore from backup on fresh install
-sharkey_force_fresh: false
-
-# NAS IP address (adjust to your network)
-nas_ip: "x.x.x.x"
-
-# Static website configuration
-# make a public repo with index.html, styles.css, script.js and so on and replace the placeholders below
-static_website:
-  enabled: true
-  repo_url: "https://github.com/yourusername/yourwebsite.git"
-  repo_branch: "build"
-  local_path: "/srv/nginx/{{ base_domain }}"
-  github_api_url: "https://api.github.com/repos/yourusername/yourwebsite/commits/main"
-
-# MinIO/S3 Configuration for Restic Backups
-# See minio/README.md for setup instructions
+# =============================================================================
+# MINIO / RESTIC BACKUP (homelab-only services)
+# =============================================================================
 minio_endpoint: "https://nas.core.lan:9000"
-
-# Forgejo backup configuration
-minio_forgejo_bucket: "forgejo-backups"
-minio_forgejo_access_key: "forgejo-user"
-minio_forgejo_secret_key: "placeholder"
-
-# Sharkey backup configuration
-minio_sharkey_bucket: "sharkey-backups"
-minio_sharkey_access_key: "sharkey-user"
-minio_sharkey_secret_key: "placeholder"
-
-# GitLab backup configuration
-minio_gitlab_bucket: "gitlab-backups"
-minio_gitlab_access_key: "gitlab-user"
-minio_gitlab_secret_key: "placeholder"
 
 # UniFi Controller backup configuration
 minio_unifi_bucket: "unifi-backups"
@@ -134,11 +47,6 @@ torrentdown_nas_user: "someuser"
 torrentdown_nas_password: "placeholder"
 torrentdown_torrents_share: "//{{ nas_ip }}/sas/torrents"
 
-# Files CDN NAS mount configuration (read-only)
-filescdn_nas_user: "someuser"
-filescdn_nas_password: "placeholder"
-filescdn_files_share: "//{{ nas_ip }}/tank/Server/filescdn"
-
 # Immich NAS mount configuration (read-write)
 immich_nas_user: "someuser"
 immich_nas_password: "placeholder"
@@ -151,10 +59,10 @@ immich_photos_share: "//{{ nas_ip }}/tank/Server/immich"
 # - WIREGUARD_PRESHARED_KEY: Your preshared key (can be empty string)
 # - SERVER_REGIONS: Comma-separated list of regions (e.g., "Netherlands" or "Sweden,Italy")
 seedbox_windscribe:
-  private_key: "your_private_key_here" # Your Windscribe WireGuard private key
-  addresses: "100.xx.xx.xx/32" # Your Windscribe WireGuard address
-  preshared_key: "your_preshared_key_here" # Your Windscribe WireGuard preshared key (can be empty)
-  server_regions: "Netherlands" # Comma-separated list of server regions
+  private_key: "your_private_key_here"
+  addresses: "100.xx.xx.xx/32"
+  preshared_key: "your_preshared_key_here"
+  server_regions: "Netherlands"
 
 # seedbox - NAS mount configuration
 seedbox_nas_user: "someuser"

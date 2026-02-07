@@ -2,8 +2,8 @@ all:
   children:
     homelab:
       hosts:
-        nginx-gateway:
-          ansible_host: x.x.x.x # Example IP
+        seedbox:
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -12,58 +12,10 @@ all:
           host_roles:
             - base
             - monitoring-hl
-            - nginx_gateway
-          hostname: nginx-gateway
-        sharkey:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - sharkey
-          hostname: sharkey
-        gitlab:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - gitlab
-          hostname: gitlab
-        searxng:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - searxng
-          hostname: searxng
-        torrent-down:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - torrent-down
-          hostname: torrent-down
+            - seedbox
+          hostname: seedbox
         immich:
-          ansible_host: x.x.x.x # Example IP
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -75,7 +27,7 @@ all:
             - immich
           hostname: immich
         observability:
-          ansible_host: x.x.x.x # Example IP
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -85,18 +37,8 @@ all:
             - base
             - observability
           hostname: observability
-        buildhost:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-          hostname: buildhost
         navidrome:
-          ansible_host: x.x.x.x # Example IP
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -108,7 +50,7 @@ all:
             - navidrome
           hostname: navidrome
         unificontroller:
-          ansible_host: x.x.x.x # Example IP
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -119,8 +61,8 @@ all:
             - monitoring-hl
             - unificontroller
           hostname: unificontroller
-        filescdn:
-          ansible_host: x.x.x.x # Example IP
+        unbound:
+          ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
           ansible_become_method: sudo
@@ -129,63 +71,5 @@ all:
           host_roles:
             - base
             - monitoring-hl
-            - filescdn
-          hostname: filescdn
-        forgejo:
-          ansible_host: x.x.x.x # Example IP
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - forgejo
-          hostname: forgejo
-    vpses:
-      hosts:
-        vps1:
-         ansible_host: x.x.x.x  # Example IP - replace with your VPS IP
-         ansible_user: ansible
-         ansible_python_interpreter: /usr/bin/python3
-         ansible_become_method: sudo
-         system_shell: /bin/bash
-         os_family: Debian
-         host_roles:
-           - base
-           - monitoring-vps
-         hostname: vps1
-        vps2:
-         ansible_host: x.x.x.x  # Example IP - replace with your VPS IP
-         ansible_user: ansible
-         ansible_python_interpreter: /usr/bin/python3
-         ansible_become_method: sudo
-         system_shell: /bin/bash
-         os_family: Debian
-         host_roles:
-           - base
-           - monitoring-vps
-         hostname: vps2
-        vps3:
-         ansible_host: x.x.x.x  # Example IP - replace with your VPS IP
-         ansible_user: ansible
-         ansible_python_interpreter: /usr/bin/python3
-         ansible_become_method: sudo
-         system_shell: /bin/bash
-         os_family: Debian
-         host_roles:
-           - base
-           - monitoring-vps
-         hostname: vps3
-        vps4:
-         ansible_host: x.x.x.x  # Example IP - replace with your VPS IP
-         ansible_user: ansible
-         ansible_python_interpreter: /usr/bin/python3
-         ansible_become_method: sudo
-         system_shell: /bin/bash
-         os_family: Debian
-         host_roles:
-           - base
-           - monitoring-vps
-         hostname: vps4
+            - unbound
+          hostname: unbound

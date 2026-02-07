@@ -24,17 +24,12 @@ hosts/
 Some hosts may have additional credential files depending on the services they run:
 
 ### Authentication & Access
-- `gitlab_root_pass.txt` - GitLab root password
 - `grafana_admin_password.txt` - Grafana admin password
-- `searxng_secret_key.txt` - SearXNG secret key
 - `initial_password.txt` - Initial password for services like qBittorrent
 - `mongo_root_password.txt` - MongoDB root password
 - `mongo_unifi_password.txt` - MongoDB UniFi user password
 
 ### Backup Encryption (Restic)
-- `restic_forgejo_password.txt` - Forgejo backup encryption key
-- `restic_sharkey_password.txt` - Sharkey backup encryption key
-- `restic_gitlab_password.txt` - GitLab backup encryption key
 - `restic_unifi_password.txt` - UniFi Controller backup encryption key
 - `restic_navidrome_password.txt` - Navidrome backup encryption key
 - `restic_observability_password.txt` - Observability stack backup encryption key

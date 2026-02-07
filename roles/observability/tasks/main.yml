@@ -410,28 +410,13 @@
     force: false
   become: true
 
-- name: Get external-monitor host IPs
-  ansible.builtin.set_fact:
-    observability_external_monitor_ips: >-
-      {{ groups['all'] |
-      map('extract', hostvars) |
-      selectattr('host_roles', 'defined') |
-      selectattr('host_roles', 'contains', 'external-monitor') |
-      map(attribute='ansible_host') |
-      list }}
-
-# =============================================================================
-# FIREWALL
-# =============================================================================
-
 - name: Allow Prometheus HTTP from external monitor VPS
   community.general.ufw:
     rule: allow
     port: 9090
     proto: tcp
-    from_ip: "{{ item }}"
-  loop: "{{ observability_external_monitor_ips }}"
-  when: observability_external_monitor_ips | length > 0
+    from_ip: "{{ vps_public_ip }}"
+  when: vps_public_ip is defined
   notify: Reload ufw
 
 - name: Allow Grafana HTTP

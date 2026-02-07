@@ -1,14 +1,16 @@
-# Ansible Infrastructure Automation
+# Ansible Homelab Infrastructure
 
-A comprehensive Ansible playbook for managing a hybrid infrastructure consisting of homelab servers and VPS instances. This playbook automates the deployment and configuration of various self-hosted services including web applications, media servers, development tools, and monitoring solutions.
+A comprehensive Ansible playbook for managing homelab servers. This playbook automates the deployment and configuration of various self-hosted services including media servers, monitoring, and network infrastructure.
 
 ## 🎯 Overview
 
 This repository contains Ansible automation for managing:
 - **Homelab Infrastructure**: Self-hosted services running on local network servers
-- **VPS Infrastructure**: Remote virtual private servers for distributed services
 - **Monitoring & Observability**: Centralized monitoring with Prometheus and Grafana
-- **Service Gateway**: Nginx reverse proxy with SSL/TLS termination and static website hosting
+- **DNS**: Local DNS resolution with Unbound
+- **Backups**: Restic + MinIO S3 for encrypted, deduplicated backups
+
+> **Note**: Public-facing VPS infrastructure (Nginx gateway, SearXNG, Files CDN) is managed separately in the [public-infra](https://github.com/jan64x/public-infra) repository.
 
 ## 🔒 Security Notice
 
@@ -23,27 +25,22 @@ See [SETUP.md](SETUP.md) for detailed prerequisites and security considerations.
 ## 📋 Managed Services
 
 ### Application Services
-- **GitLab** - Self-hosted Git repository manager and CI/CD platform
-- **Sharkey** - Federated microblogging server (Misskey fork)
-- **SearXNG** - Privacy-respecting metasearch engine
 - **Immich** - Self-hosted photo and video management solution
 - **Navidrome** - Modern music server and streamer
 - **UniFi Controller** - Network management controller for UniFi devices
-- **Files CDN** - Content delivery and file hosting service
 - **Torrent Downloader** - qBittorrent-based download manager with Flood UI
 
 ### Infrastructure Services
-- **Nginx Gateway** - Reverse proxy and webserver (that automatically pulls website source code) with Cloudflare SSL integration
 - **Observability** - Prometheus and Grafana stack for metrics and visualization
 - **Monitoring (Homelab)** - Node Exporter for homelab hosts
-- **Monitoring (VPS)** - Node Exporter for VPS hosts with firewall restrictions
+- **Unbound** - Local DNS resolver with DNS-over-TLS
+- **Promtail** - Log shipper for Loki
 - **Base** - Common system configuration (users, SSH, security, firewall)
 
 ## 🏗️ Architecture
 
 ### Host Groups
 - **homelab**: Local network servers running self-hosted applications
-- **vpses**: Remote virtual private servers for distributed infrastructure
 
 ### Role-Based Deployment
 Each host can have multiple roles assigned via the `host_roles` variable in the inventory. The playbook dynamically includes roles based on host configuration, allowing flexible service distribution across infrastructure.
@@ -64,25 +61,20 @@ Each host can have multiple roles assigned via the `host_roles` variable in the 
 ├── site.yml                 # Main playbook
 ├── update.yml              # System update playbook
 ├── inventory/
-│   └── hosts.yml           # Inventory definition (homelab + VPS hosts)
+│   └── hosts.yml           # Inventory definition (homelab hosts)
 ├── group_vars/
 │   ├── all.yml             # Variables for all hosts
-│   ├── homelab.yml         # Homelab-specific variables
-│   └── vpses.yml           # VPS-specific variables
+│   └── homelab.yml         # Homelab-specific variables
 ├── roles/                  # Service roles
 │   ├── base/               # Base system configuration
-│   ├── nginx_gateway/      # Nginx reverse proxy
-│   ├── gitlab/             # GitLab CE
-│   ├── sharkey/            # Sharkey federated server
-│   ├── searxng/            # SearXNG search engine
 │   ├── immich/             # Immich photo manager
 │   ├── navidrome/          # Navidrome music server
-│   ├── torrent-down/       # qBittorrent + Flood
-│   ├── filescdn/           # File CDN service
+│   ├── seedbox/            # qBittorrent + Flood
 │   ├── unificontroller/    # UniFi controller
+│   ├── unbound/            # Unbound DNS resolver
 │   ├── observability/      # Prometheus + Grafana
 │   ├── monitoring-hl/      # Node Exporter (homelab)
-│   └── monitoring-vps/     # Node Exporter (VPS)
+│   └── promtail-hl/        # Promtail log shipper (homelab)
 └── credentials/            # Sensitive data (gitignored)
     ├── hosts/              # Per-host credentials
     └── ssh_keys/           # SSH keys for authentication
@@ -116,9 +108,8 @@ Each host can have multiple roles assigned via the `host_roles` variable in the 
 ## 🔧 Configuration
 
 ### Inventory Structure
-Hosts are organized into two groups:
+Hosts are organized in a single group:
 - `homelab` - Local infrastructure
-- `vpses` - Cloud/VPS infrastructure
 
 Each host defines:
 - Connection parameters (`ansible_host`, `ansible_user`)
@@ -126,10 +117,9 @@ Each host defines:
 - Assigned roles (`host_roles`)
 
 ### Variable Hierarchy
-1. `group_vars/all.yml` - Global settings (SSH keys, common users)
-2. `group_vars/homelab.yml` - Homelab settings (domain, NAS config, services)
-3. `group_vars/vpses.yml` - VPS settings (SSH keys, security)
-4. Host variables in `inventory/hosts.yml`
+1. `group_vars/all.yml` - Global settings (SSH keys, common users, Unbound DNS)
+2. `group_vars/homelab.yml` - Homelab settings (NAS config, backup credentials)
+3. Host variables in `inventory/hosts.yml`
 
 ## 🔐 Security Features
 
@@ -160,9 +150,6 @@ Services use **Restic with MinIO S3** for secure, encrypted, deduplicated backup
 - **Scheduled**: Daily cron jobs run backups automatically
 
 ### Services with Backup Support
-- **Forgejo** - Git repositories and PostgreSQL database
-- **Sharkey** - PostgreSQL database and media uploads
-- **GitLab** - Repositories and database
 - **UniFi Controller** - .unf configuration backups
 - **Navidrome** - SQLite database
 - **Observability** - Prometheus TSDB and Grafana dashboards
@@ -172,7 +159,6 @@ Some services mount NAS shares for direct storage access:
 - **Navidrome** - Music library (read-only mount)
 - **Immich** - Photo storage (read-write mount)
 - **Torrent-Down** - Download directory (read-write mount)
-- **Files CDN** - Static content (read-only mount)
 
 See **[minio/README.md](minio/README.md)** for complete backup setup.
 
@@ -217,15 +203,6 @@ Foundation role applied to all hosts. Configures:
 - UFW firewall
 - Security tools (fail2ban)
 - System utilities (chrony, unattended-upgrades)
-
-### nginx_gateway
-Reverse proxy and webserver with:
-- SSL/TLS termination (Cloudflare Origin CA)
-- Virtual host configuration
-- Service routing
-- Static website deployment from Git repository
-- Automatic website updates on repository changes (when the playbook is re-run)
-- NAS integration for certificate management
 
 ### Application Roles
 Each application role:

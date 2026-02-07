@@ -153,12 +153,6 @@ ssh-keygen -t ed25519 -f sysadmin_homelab.key -C "sysadmin-homelab"
 mv sysadmin_homelab.key.pub sysadmin_homelab.pub
 ```
 
-**For VPS hosts:**
-```bash
-ssh-keygen -t ed25519 -f sysadmin_vpses.key -C "sysadmin-vpses"
-mv sysadmin_vpses.key.pub sysadmin_vpses.pub
-```
-
 ### 2. Verify SSH Access
 
 Since your hosts should already have the ansible user configured with the public key, verify SSH access:
@@ -186,7 +180,7 @@ all:
   children:
     homelab:
       hosts:
-        nginx-gateway:
+        immich:
           ansible_host: 192.168.1.10  # Replace with actual IP
           ansible_user: ansible       # Pre-configured ansible user
           ansible_python_interpreter: /usr/bin/python3
@@ -195,16 +189,10 @@ all:
           os_family: Debian
           host_roles:
             - base
-            - nginx_gateway
-          hostname: nginx-gateway
+            - monitoring-hl
+            - immich
+          hostname: immich
         # Add more homelab hosts...
-    
-    vpses:
-      hosts:
-        vps1:
-          ansible_host: 203.0.113.10  # Replace with VPS IP
-          ansible_user: ansible       # Pre-configured ansible user
-          # ... rest of configuration
 ```
 
 **Key Points:**
@@ -217,18 +205,14 @@ all:
 
 Available roles:
 - `base` - Base configuration (recommended for all hosts)
-- `nginx_gateway` - Nginx reverse proxy
-- `gitlab` - GitLab CE
-- `sharkey` - Sharkey/Misskey server
-- `searxng` - SearXNG search
 - `immich` - Immich photos
 - `navidrome` - Navidrome music
-- `torrent-down` - qBittorrent + Flood
-- `filescdn` - File CDN
+- `seedbox` - qBittorrent + VueTorrent
 - `unificontroller` - UniFi controller
 - `observability` - Prometheus + Grafana
 - `monitoring-hl` - Node Exporter (homelab)
-- `monitoring-vps` - Node Exporter (VPS)
+- `promtail-hl` - Promtail log shipper (homelab)
+- `unbound` - Unbound DNS resolver
 
 Example minimal setup:
 ```yaml
@@ -266,67 +250,14 @@ ansible_user_groups:
 # SSH key for all homelab hosts
 sysadmin_ssh_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/sysadmin_homelab.pub') }}"
 
-# Base domain for all services (change this to your domain)
-base_domain: example.com
-
-# Nginx Configuration for public-facing servers
-ssl_enabled: true
-cloudflare_enabled: true      # Set to false if not using Cloudflare
-nginx_ssl_cert_path: /etc/nginx/ssl/{{ base_domain }}.pem
-nginx_ssl_key_path: /etc/nginx/ssl/{{ base_domain }}.key
-nginx_ssl_client_cert_path: /etc/nginx/ssl/origin_ca_rsa_root.pem
-domain_name: "{{ base_domain }}"
-
-# SSL certificates to copy from NAS
-# Each certificate is copied from NAS path: /tank/Server/nginx/ssl/<src>
-nginx_ssl_certificates:
-  - src: "{{ base_domain }}.pem"
-    dest: "{{ nginx_ssl_cert_path }}"
-  - src: "{{ base_domain }}.key"
-    dest: "{{ nginx_ssl_key_path }}"
-  - src: "origin_ca_rsa_root.pem"
-    dest: "{{ nginx_ssl_client_cert_path }}"
-
-# Nginx virtual hosts to configure
-# Each entry corresponds to a template file: templates/<name>.conf.j2
-nginx_vhosts:
-  - search
-  - gitlab
-  - base_domain
-  - sharkey
-  - filescdn
-
-# Service port mappings (ports exposed by each service)
-# Adjust these if your services use different ports
-service_ports:
-  search: 8080       # SearXNG default port
-  gitlab: 80         # GitLab HTTP port
-  sharkey: 3000      # Sharkey/Misskey default port
-  filescdn: 8080     # File CDN service port
-
-# Services configuration
-# These use hostvars to automatically pull backend IPs from inventory/hosts.yml
-services:
-  search:
-    domain: "search.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['searxng']['ansible_host'] }}:{{ service_ports.search }}"
-  gitlab:
-    domain: "git.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['gitlab']['ansible_host'] }}:{{ service_ports.gitlab }}"
-  sharkey:
-    domain: "fedi.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['sharkey']['ansible_host'] }}:{{ service_ports.sharkey }}"
-  filescdn:
-    domain: "cdn.{{ base_domain }}"
-    backend_server: "http://{{ hostvars['filescdn']['ansible_host'] }}:{{ service_ports.filescdn }}"
-
-# Service base URLs (used by various roles)
-searxng_base_url: "https://search.{{ base_domain }}"
-sharkey_base_url: "https://fedi.{{ base_domain }}"
-
-# GitLab configuration (homelab specific)
-gitlab_force_restore: false
-gitlab_force_fresh_install: false
+# Grafana SMTP Configuration
+grafana_smtp_enabled: false
+grafana_smtp_host: "smtp.example.com:465"
+grafana_smtp_user: "myuser"
+grafana_smtp_password: "mysecret"
+grafana_smtp_from_address: "grafana@example.com"
+grafana_smtp_from_name: "Grafana"
+grafana_smtp_skip_verify: false
 
 # monitoring - observability role with prometheus and grafana
 monitoring_force_fresh_install: false
@@ -337,42 +268,19 @@ immich_force_restore: false
 # NAS IP address (adjust to your network)
 nas_ip: "x.x.x.x"
 
-# Static website configuration
-# make a public repo with index.html, styles.css, script.js and so on and replace the placeholders below
-static_website:
-  enabled: true
-  repo_url: "https://github.com/yourusername/yourwebsite.git"
-  repo_branch: "main"
-  local_path: "/srv/nginx/{{ base_domain }}"
-  github_api_url: "https://api.github.com/repos/yourusername/yourwebsite/commits/main"
-
 # MinIO/S3 Configuration for Restic Backups
 minio_endpoint: "https://nas.core.lan:9000"
-
-# Forgejo backup credentials
-minio_forgejo_bucket: "forgejo-backups"
-minio_forgejo_access_key: "forgejo-user"
-minio_forgejo_secret_key: "your-strong-password-here"
-
-# Sharkey backup credentials
-minio_sharkey_bucket: "sharkey-backups"
-minio_sharkey_access_key: "sharkey-user"
-minio_sharkey_secret_key: "your-strong-password-here"
-
 ```
 
-### 3. VPS Variables
+### 3. Homelab Variables
 
 ```bash
-cp group_vars/vpses.yml.example group_vars/vpses.yml
+cp group_vars/homelab.yml.example group_vars/homelab.yml
 ```
 
 ## MinIO S3 Backup Configuration
 
 Multiple services use Restic with MinIO S3-compatible storage for encrypted backups:
-- **Forgejo** - Git repositories and database
-- **Sharkey** - Database and media files
-- **GitLab** - Repositories and database
 - **UniFi Controller** - Configuration backups (.unf files)
 - **Navidrome** - Music database
 - **Observability** - Prometheus and Grafana data
@@ -400,16 +308,7 @@ See **[minio/README.md](minio/README.md)** for complete instructions. Summary:
 # MinIO/S3 Configuration
 minio_endpoint: "https://nas.core.lan:9000"
 
-# Per-service backup credentials
-minio_forgejo_bucket: "forgejo-backups"
-minio_forgejo_access_key: "forgejo-user"
-minio_forgejo_secret_key: "your-strong-password"
-
-minio_sharkey_bucket: "sharkey-backups"
-minio_sharkey_access_key: "sharkey-user"
-minio_sharkey_secret_key: "your-strong-password"
-
-# ... similar for gitlab, unifi, navidrome, observability
+# ... similar for unifi, navidrome, observability
 ```
 
 ### NAS Mount Configuration
@@ -417,7 +316,6 @@ minio_sharkey_secret_key: "your-strong-password"
 Some services require direct NAS access for media/data:
 - **Navidrome** - Music library (read-only)
 - **Torrent-Down** - Download directory (read-write)
-- **Files CDN** - Static files (read-only)
 - **Immich** - Photo storage (read-write)
 
 Configure NAS credentials and share paths in `group_vars/homelab.yml`:
@@ -435,11 +333,6 @@ navidrome_music_share: "//{{ nas_ip }}/tank/Media/Music"
 torrentdown_nas_user: "downloads-user"
 torrentdown_nas_password: "secure-password"
 torrentdown_torrents_share: "//{{ nas_ip }}/sas/torrents"
-
-# Files CDN NAS configuration
-filescdn_nas_user: "cdn-user"
-filescdn_nas_password: "secure-password"
-filescdn_files_share: "//{{ nas_ip }}/tank/Server/filescdn"
 
 # Immich NAS configuration
 immich_nas_user: "photos-user"
@@ -466,7 +359,7 @@ credentials/hosts/<hostname>/
 **Important Notes:**
 - Credentials are generated on first run and reused on subsequent runs
 - Restic passwords encrypt your backup data (keep them safe!)
-- Service-specific passwords (GitLab, Grafana, etc.) are also auto-generated
+- Service-specific passwords (Grafana, etc.) are also auto-generated
 - All credential files are gitignored for security
 
 ### Manual Configuration Required
@@ -527,7 +420,7 @@ ansible all -m ping
 
 Expected output:
 ```
-nginx-gateway | SUCCESS => {
+immich | SUCCESS => {
     "changed": false,
     "ping": "pong"
 }
@@ -583,64 +476,10 @@ ansible-playbook site.yml
 
 Or target specific hosts:
 ```bash
-ansible-playbook site.yml --limit nginx-gateway,gitlab
+ansible-playbook site.yml --limit immich
 ```
 
 ## Service-Specific Setup
-
-### Nginx Gateway
-
-1. **SSL Certificates**: 
-   - If using Cloudflare, obtain Origin CA certificates
-   - Place in NAS at configured path, or modify role to use Let's Encrypt
-   - Certificates are copied from NAS during deployment
-
-2. **DNS Configuration**:
-   - Point your domains to the nginx-gateway IP (public IP)
-   - Configure Cloudflare DNS (if using)
-
-### GitLab
-
-1. **Backup/Restore**:
-   - On first run, set `gitlab_force_fresh_install: true` for fresh install
-   - Or place backup in NAS and set `gitlab_force_restore: true`
-
-2. **Root Password**:
-   - Located in `credentials/hosts/gitlab/gitlab_root_pass.txt`
-
-3. **Access**: `https://git.yourdomain.com`
-
-### Sharkey
-
-1. **Initial Setup**:
-   - After deployment, access `https://fedi.yourdomain.com`
-   - Complete web-based setup wizard
-   - Admin credentials in `credentials/hosts/sharkey/`
-
-2. **Backup/Restore**:
-   - Backups run daily at 3 AM to MinIO S3 via Restic
-   - On first run with existing backups, automatic restore occurs
-   - Set `sharkey_force_fresh: true` to skip restore and start fresh
-   - Database: PostgreSQL (backed up via `pg_dump`)
-   - Files: `/opt/sharkey/files` directory
-
-3. **Access**: `https://fedi.yourdomain.com`
-
-### Forgejo
-
-1. **Backup/Restore**:
-   - Backups run daily at 3 AM to MinIO S3 via Restic
-   - On first run with existing backups, automatic restore occurs
-   - Set `forgejo_force_fresh: true` to skip restore and start fresh
-   - Database: MySQL (backed up via `mysqldump`)
-   - Files: `/var/lib/forgejo/data` directory
-
-2. **Access**: `https://git.yourdomain.com`
-
-3. **First Run**:
-   - If fresh install, complete the web-based setup wizard
-   - Admin username: Choose any username EXCEPT 'admin' (reserved)
-   - Use email format: `user@forgejo.yourdomain.com`
 
 ### Observability (Prometheus + Grafana)
 
@@ -650,7 +489,7 @@ ansible-playbook site.yml --limit nginx-gateway,gitlab
    - Password: In `credentials/hosts/observability/grafana_admin_password.txt`
 
 2. **Prometheus**:
-   - Configured to scrape all hosts with `monitoring-hl` or `monitoring-vps` roles
+   - Configured to scrape all hosts with `monitoring-hl` role
    - Access: `http://<observability-host>:9090`
 
 ### Other Services
@@ -762,7 +601,7 @@ ansible-playbook site.yml --tags base
 Run specific hosts:
 ```bash
 ansible-playbook site.yml --limit homelab
-ansible-playbook site.yml --limit nginx-gateway
+ansible-playbook site.yml --limit immich
 ```
 
 ### Parallel Execution
