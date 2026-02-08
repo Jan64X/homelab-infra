@@ -229,7 +229,7 @@ This is a personal infrastructure repository. If you're using it as reference:
 
 ## 📄 License
 
-This playbook is provided as-is for personal infrastructure management. Customize as needed for your environment.
+This playbook is provided as-is for personal infrastructure management. Customize as needed for your environment. See [LICENSE](LICENSE). 
 
 ## 🆘 Support
 

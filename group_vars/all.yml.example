@@ -17,10 +17,6 @@ ssh_port: 22
 # Ansible User SSH Key (same for all hosts)
 ansible_ssh_public_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/ansible_admin.pub') }}"
 
-# VPS public IP — for firewall rules allowing external-monitor to probe homelab
-# This is the IP of the VPS running the external-monitor (managed in public-infra repo)
-vps_public_ip: "x.x.x.x"
-
 # Grafana SMTP Configuration
 grafana_smtp_enabled: false
 grafana_smtp_host: "smtp.example.com:465"

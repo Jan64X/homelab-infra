@@ -410,15 +410,6 @@
     force: false
   become: true
 
-- name: Allow Prometheus HTTP from external monitor VPS
-  community.general.ufw:
-    rule: allow
-    port: 9090
-    proto: tcp
-    from_ip: "{{ vps_public_ip }}"
-  when: vps_public_ip is defined
-  notify: Reload ufw
-
 - name: Allow Grafana HTTP
   community.general.ufw:
     rule: allow

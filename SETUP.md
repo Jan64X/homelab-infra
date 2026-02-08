@@ -30,13 +30,14 @@ This guide walks you through setting up this Ansible playbook to manage your inf
 > **⚠️ CRITICAL: Host Preparation Required**
 > 
 > This playbook does NOT perform initial host setup. You must manually prepare each host with:
-> - Debian 12 installed
+> - Debian 12/13 installed
 > - An `ansible` user with UID/GID 1000
 > - Passwordless sudo configured
 > - SSH key authentication enabled
 > - Python 3 installed
 >
 > Attempting to run this playbook on unprepared hosts will fail.
+> Using cloud-init with the Debian cloud image is recommended.
 
 ### Control Node (Your Machine)
 - **Ansible**: Version 2.9 or later

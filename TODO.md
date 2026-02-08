@@ -19,3 +19,5 @@ changed: [unificontroller]
 - local nginx proxy for local services maybe?
 
 - unbound filter out clients so that only some clients can access internal domains
+
+- re-add forgejo but this time for local use
