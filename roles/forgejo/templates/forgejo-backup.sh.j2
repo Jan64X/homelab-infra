@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+# Configuration
+# Load Restic Environment Variables
+source /opt/forgejo/restic-env.sh
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# Check connectivity
+if [ -z "${RESTIC_REPOSITORY:-}" ]; then
+    log "ERROR: Restic environment variables not set."
+    exit 1
+fi
+
+log "Starting Forgejo Restic backup..."
+
+# 1. Backup Database (Stream directly to Restic)
+# We use --stdin-filename so we can target it during restore
+log "Snapshotting Database..."
+docker exec forgejo-db mysqldump \
+    -uroot \
+    -p{{ forgejo_db_root_password }} \
+    --single-transaction \
+    --skip-lock-tables \
+    --routines \
+    --triggers \
+    forgejo | restic backup \
+    --stdin \
+    --stdin-filename dump.sql \
+    --tag database \
+    --host {{ inventory_hostname }} \
+    --insecure-tls
+
+# 2. Backup Files
+# We backup the data directory directly
+log "Snapshotting Data Directory..."
+restic backup /var/lib/forgejo/data \
+    --tag files \
+    --exclude /var/lib/forgejo/data/tmp \
+    --host {{ inventory_hostname }} \
+    --insecure-tls
+
+# 3. MAINTENANCE NOTICE
+# We DO NOT prune here. 
+# This VM has an "Append-Only" (plus locks) policy.
+# Attempting to prune will result in Access Denied errors.
+# Pruning is handled by the central Admin server.
+
+log "Backup upload complete."
