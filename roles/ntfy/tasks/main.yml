@@ -1,0 +1,214 @@
+---
+# =============================================================================
+# PACKAGE INSTALLATION
+# =============================================================================
+
+- name: Install required packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - python3-docker
+      - certbot
+      - python3-certbot-dns-cloudflare
+    state: present
+    update_cache: true
+  become: true
+
+- name: Create directory for Docker GPG key
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Add Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+  become: true
+
+- name: Get system architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: ntfy_system_arch
+  changed_when: false
+
+- name: Add Docker repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ ntfy_system_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/debian
+      {{ ansible_facts['distribution_release'] }} stable
+    state: present
+    filename: docker
+  become: true
+
+- name: Install Docker and Docker Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+  become: true
+
+- name: Ensure Docker service is running
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+  become: true
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
+
+- name: Create ntfy directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/ntfy
+    - /opt/ntfy/ssl
+    - /var/lib/ntfy/cache
+    - /var/lib/ntfy/data
+  become: true
+
+# =============================================================================
+# TLS CERTIFICATE (Certbot + Cloudflare DNS-01)
+# =============================================================================
+
+- name: Create Cloudflare API credentials file
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/cloudflare.ini
+    mode: '0600'
+    content: |
+      dns_cloudflare_api_token = {{ cloudflare_api_token }}
+  become: true
+
+- name: Obtain TLS certificate for {{ ntfy_domain }}
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --dns-cloudflare
+      --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+      --dns-cloudflare-propagation-seconds 60
+      --non-interactive --agree-tos --email {{ certbot_email }}
+      --cert-name {{ ntfy_domain }}
+      -d {{ ntfy_domain }}
+      --keep-until-expiring
+  args:
+    creates: "/etc/letsencrypt/live/{{ ntfy_domain }}/fullchain.pem"
+  become: true
+
+- name: Ensure renewal hooks directory exists
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Add deploy hook to reload nginx on cert renewal
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/renewal-hooks/deploy/ntfy_nginx_reload
+    mode: '0755'
+    content: |
+      #!/bin/sh
+      docker compose -f /opt/ntfy/docker-compose.yml exec -T nginx nginx -s reload
+  become: true
+
+- name: Ensure Certbot renewal timer is active
+  ansible.builtin.service:
+    name: certbot.timer
+    state: started
+    enabled: true
+  become: true
+
+# =============================================================================
+# NGINX CONFIGURATION
+# =============================================================================
+
+- name: Generate DH parameters
+  community.crypto.openssl_dhparam:
+    path: /opt/ntfy/ssl/dhparam.pem
+    size: 2048
+  become: true
+
+- name: Deploy nginx.conf
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /opt/ntfy/nginx.conf
+    mode: '0644'
+  become: true
+  notify: Restart ntfy
+
+# =============================================================================
+# DOCKER COMPOSE DEPLOYMENT
+# =============================================================================
+
+- name: Deploy docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/ntfy/docker-compose.yml
+    mode: '0644'
+  become: true
+  notify: Restart ntfy
+
+- name: Start ntfy with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/ntfy
+    state: present
+    pull: "always"
+  become: true
+
+- name: Wait for ntfy to be healthy
+  ansible.builtin.uri:
+    url: "https://localhost/v1/health"
+    method: GET
+    status_code: 200
+    return_content: true
+    validate_certs: false
+  register: ntfy_health
+  until: ntfy_health.status == 200
+  retries: 30
+  delay: 5
+
+# =============================================================================
+# FIREWALL
+# =============================================================================
+
+- name: Allow HTTPS and HTTP ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "443"
+    - "80"
+  become: true
+  notify: Reload ufw
+
+# =============================================================================
+# POST-INSTALL INFO
+# =============================================================================
+
+- name: Display ntfy installation info
+  ansible.builtin.debug:
+    msg: |
+      ===================================================================
+      ntfy installation complete!
+
+      Web interface: https://{{ ntfy_domain }}
+      TLS: Let's Encrypt via Cloudflare DNS-01
+
+      To send a test notification:
+        curl -d "Hello from ntfy!" https://{{ ntfy_domain }}/test
+
+      To subscribe to a topic via the web UI:
+        https://{{ ntfy_domain }}/test
+
+      ===================================================================

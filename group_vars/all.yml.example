@@ -17,14 +17,13 @@ ssh_port: 22
 # Ansible User SSH Key (same for all hosts)
 ansible_ssh_public_key: "{{ lookup('file', playbook_dir + '/credentials/ssh_keys/ansible_admin.pub') }}"
 
-# Grafana SMTP Configuration
-grafana_smtp_enabled: false
-grafana_smtp_host: "smtp.example.com:465"
-grafana_smtp_user: "myuser"
-grafana_smtp_password: "mysecret"
-grafana_smtp_from_address: "grafana@example.com"
-grafana_smtp_from_name: "Grafana"
-grafana_smtp_skip_verify: false
+# ===========================================
+# CLOUDFLARE / CERTBOT (playbook-wide)
+# ===========================================
+# Cloudflare API token for DNS-01 ACME challenges (needs Zone:DNS:Edit permission)
+cloudflare_api_token: "YOUR_CLOUDFLARE_API_TOKEN_HERE"
+# Email address for Let's Encrypt certificate registration
+certbot_email: "admin@example.com"
 
 # ===========================================
 # UNBOUND DNS CONFIGURATION
@@ -103,6 +102,9 @@ unbound:
     unbound:
       - dns
       - dns-server
+    ntfy:
+      - notifications
+      - push
     
 
   # Manual DNS records for non-Ansible-managed devices

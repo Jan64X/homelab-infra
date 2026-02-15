@@ -68,3 +68,6 @@ seedbox_windscribe:
 seedbox_nas_user: "someuser"
 seedbox_nas_password: "placeholder"
 seedbox_nas_share: "//{{ nas_ip }}/torrents"
+
+# ntfy
+ntfy_timezone: "UTC"

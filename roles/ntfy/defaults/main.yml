@@ -1,0 +1,34 @@
+---
+# ntfy Docker image version
+ntfy_version: "latest"
+
+# Network port
+ntfy_port: 80
+
+# Domain configuration
+ntfy_domain: "ntfy.{{ unbound.domain }}"
+
+# Base URL (used by ntfy for self-referencing links)
+ntfy_base_url: "https://{{ ntfy_domain }}"
+
+# Upstream server for phone app connection (optional, empty = disabled)
+ntfy_upstream_base_url: "" # could add "https://ntfy.sh"
+
+# Timezone
+ntfy_timezone: "UTC"
+
+# Rate limiting
+ntfy_global_topic_limit: 15000
+ntfy_visitor_request_limit_burst: 60
+ntfy_visitor_request_limit_replenish: "5s"
+
+# Attachment settings
+ntfy_attachment_total_size_limit: "100M"
+ntfy_attachment_file_size_limit: "15M"
+ntfy_attachment_expiry_duration: "3h"
+
+# Cache duration
+ntfy_cache_duration: "12h"
+
+# Log level (DEBUG, INFO, WARN, ERROR)
+ntfy_log_level: "INFO"

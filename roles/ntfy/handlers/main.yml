@@ -1,0 +1,16 @@
+---
+- name: Reload ufw
+  community.general.ufw:
+    state: reloaded
+
+- name: Restart ntfy
+  community.docker.docker_compose_v2:
+    project_src: /opt/ntfy
+    state: restarted
+  become: true
+
+- name: Reload nginx
+  ansible.builtin.command:
+    cmd: docker compose -f /opt/ntfy/docker-compose.yml exec -T nginx nginx -s reload
+  changed_when: true
+  become: true
