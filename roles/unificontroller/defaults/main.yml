@@ -1,6 +1,0 @@
----
-# UniFi Controller Configuration
-
-# Restore configuration
-# Set to true to skip automatic restore from backup on fresh install
-unifi_force_fresh: false

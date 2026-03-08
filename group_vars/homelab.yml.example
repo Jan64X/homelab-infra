@@ -24,11 +24,6 @@ immich_force_restore: false
 # =============================================================================
 minio_endpoint: "https://nas.core.lan:9000"
 
-# UniFi Controller backup configuration
-minio_unifi_bucket: "unifi-backups"
-minio_unifi_access_key: "unifi-user"
-minio_unifi_secret_key: "placeholder"
-
 # Navidrome backup and NAS mount configuration
 minio_navidrome_bucket: "navidrome-backups"
 minio_navidrome_access_key: "navidrome-user"
