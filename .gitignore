@@ -1,22 +1,22 @@
 # Ignore all files in credentials, but not the directories themselves
-credentials/*
-!credentials/ssh_keys/
-!credentials/hosts/
-credentials/ssh_keys/*
-credentials/hosts/*
-!credentials/ssh_keys/*.example
-!credentials/ssh_keys/README.md
-!credentials/hosts/README.md
-!credentials/*.example
+ansible/credentials/*
+!ansible/credentials/ssh_keys/
+!ansible/credentials/hosts/
+ansible/credentials/ssh_keys/*
+ansible/credentials/hosts/*
+!ansible/credentials/ssh_keys/*.example
+!ansible/credentials/ssh_keys/README.md
+!ansible/credentials/hosts/README.md
+!ansible/credentials/*.example
 
 # Ignore actual configuration files but allow examples
-group_vars/all.yml
-group_vars/homelab.yml
-inventory/hosts.yml
+ansible/group_vars/all.yml
+ansible/group_vars/homelab.yml
+ansible/inventory/hosts.yml
 
 # Keep example files
-!group_vars/*.example
-!inventory/*.example
+!ansible/group_vars/*.example
+!ansible/inventory/*.example
 
 # Ignore vscode settings
 .vscode/
