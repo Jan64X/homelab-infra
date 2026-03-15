@@ -4,6 +4,7 @@
 > 
 > This playbook makes significant system changes including:
 > - User account creation and modification
+> - Account password locking for `root` and `ansible`
 > - Firewall rule configuration  
 > - Service installation and configuration
 > - SSH access modifications
@@ -63,7 +64,7 @@ This guide walks you through setting up this Ansible playbook to manage your inf
 
 **IMPORTANT**: This playbook assumes your managed hosts have already been prepared with the following configuration during OS installation:
 
-- **Debian 12 OS**
+- **Debian 12/13 OS**
 - **Python 3** installed (usually included by default)
 - **SSH server** running and accessible
 - **User Setup** (configured during OS installation):
@@ -350,8 +351,6 @@ immich_photos_share: "//{{ nas_ip }}/tank/Server/immich"
 The playbook automatically generates credentials for each host in:
 ```
 credentials/hosts/<hostname>/
-├── root_pass.txt
-├── ansible_pass.txt
 ├── <system_user>_pass.txt
 ├── restic_<service>_password.txt  # Per-service Restic encryption keys
 └── salts/
@@ -359,9 +358,19 @@ credentials/hosts/<hostname>/
 
 **Important Notes:**
 - Credentials are generated on first run and reused on subsequent runs
+- `root` and `ansible` account passwords are locked by policy and are not generated
 - Restic passwords encrypt your backup data (keep them safe!)
 - Service-specific passwords (Grafana, etc.) are also auto-generated
 - All credential files are gitignored for security
+
+### Account Access Model
+
+- `root` account password is locked
+- `ansible` account password is locked
+- SSH access is public key only
+- `ansible` keeps passwordless sudo for automation
+
+This means there is no password-based fallback for `root` or `ansible` access. Ensure the configured SSH key remains available before rollout.
 
 ### Manual Configuration Required
 
@@ -378,8 +387,6 @@ See [Variable Configuration](#variable-configuration) for details.
 The playbook automatically generates credentials for each host in:
 ```
 credentials/hosts/<hostname>/
-├── root_pass.txt
-├── ansible_pass.txt
 ├── <system_user>_pass.txt    # your system_user name
 └── salts/
 ```

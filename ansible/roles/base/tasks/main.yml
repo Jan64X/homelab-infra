@@ -84,6 +84,13 @@
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
 
+- name: Validate ansible SSH public key is configured
+  ansible.builtin.assert:
+    that:
+      - ansible_ssh_public_key is string
+      - ansible_ssh_public_key | trim | length > 0
+    fail_msg: "ansible_ssh_public_key must be set before enforcing locked account passwords."
+
 - name: Add SSH public key for system user
   ansible.builtin.copy:
     content: "{{ sysadmin_ssh_key }}"
@@ -99,6 +106,18 @@
     mode: '0600'
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
+
+- name: Lock root account password
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+  when: base_lock_root_password | bool
+
+- name: Lock ansible account password
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    password_lock: true
+  when: base_lock_ansible_password | bool
 
 - name: Configure SSH daemon
   ansible.builtin.template:
@@ -298,13 +317,15 @@
 
 - name: Add system users to proc group for process visibility
   ansible.builtin.user:
-    name: "{{ item }}"
+    name: "{{ base_proc_user }}"
     groups: proc
     append: true
   loop:
     - "{{ ansible_user }}"
     - "{{ system_user }}"
     - root
+  loop_control:
+    loop_var: base_proc_user
 
 - name: Configure /proc with hidepid in fstab
   ansible.builtin.lineinfile:
@@ -312,7 +333,7 @@
     regexp: '^proc\s+/proc\s+proc'
     line: "proc /proc proc defaults,hidepid=2,gid=proc 0 0"
     state: present
-  register: hidepid_fstab
+  register: base_hidepid_fstab
 
 - name: Check current /proc mount options
   ansible.builtin.shell: |
@@ -320,14 +341,18 @@
     mount | grep "^proc on /proc" | grep -qE "(hidepid=2|hidepid=invisible)" && echo "configured" || echo "needs_remount"
   args:
     executable: /bin/bash
-  register: proc_mount_status
+  register: base_proc_mount_status
   changed_when: false
   failed_when: false
 
 - name: Remount /proc with hidepid
-  ansible.builtin.command: mount -o remount,hidepid=2,gid=proc /proc
-  when: proc_mount_status.stdout == "needs_remount"
-  changed_when: true
+  ansible.posix.mount:
+    path: /proc
+    src: proc
+    fstype: proc
+    opts: defaults,hidepid=2,gid=proc
+    state: remounted
+  when: base_proc_mount_status.stdout == "needs_remount"
 
 - name: Set secure file permissions on critical files
   ansible.builtin.file:
@@ -362,12 +387,12 @@
     content: |
       # Disable USB storage (comment out if needed for legitimate use)
       install usb-storage /bin/true
-      
+
       # Disable Firewire (DMA attacks)
       blacklist firewire-core
       blacklist firewire-ohci
       blacklist firewire-sbp2
-      
+
       # Disable Thunderbolt (DMA attacks)
       blacklist thunderbolt
     dest: /etc/modprobe.d/blacklist-dma.conf
@@ -392,16 +417,16 @@
 
 - name: Check AppArmor status
   ansible.builtin.command: aa-status --json
-  register: apparmor_status
+  register: base_apparmor_status
   changed_when: false
   failed_when: false
 
 - name: Set AppArmor profiles to enforce mode
   ansible.builtin.command: aa-enforce /etc/apparmor.d/*
-  register: apparmor_enforce
-  changed_when: "'Setting' in apparmor_enforce.stdout"
+  register: base_apparmor_enforce
+  changed_when: "'Setting' in base_apparmor_enforce.stdout"
   failed_when: false
-  when: apparmor_status.rc == 0
+  when: base_apparmor_status.rc == 0
 
 - name: Install auditd for security monitoring
   ansible.builtin.apt:
@@ -463,43 +488,23 @@
   community.general.ufw:
     state: enabled
 
-- name: Generate random passwords and salts
+- name: Generate system user password and salt
   ansible.builtin.set_fact:
-    root_password: >-
-      {{ lookup('ansible.builtin.password',
-      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/root_pass.txt' +
-      ' chars=ascii_letters,digits,!@#$%^&*()_+-= length=32') }}
-    root_salt: >-
-      {{ lookup('ansible.builtin.password',
-      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/salts/root_salt.txt' +
-      ' chars=ascii_letters,digits length=16') }}
-    ansible_user_password: >-
-      {{ lookup('ansible.builtin.password',
-      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/' + ansible_user + '_pass.txt' +
-      ' chars=ascii_letters,digits,!@#$%^&*()_+-= length=32') }}
-    ansible_user_salt: >-
-      {{ lookup('ansible.builtin.password',
-      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/salts/' + ansible_user + '_salt.txt' +
-      ' chars=ascii_letters,digits length=16') }}
-    system_user_password: >-
+    base_system_user_password: >-
       {{ lookup('ansible.builtin.password',
       playbook_dir + '/credentials/hosts/' + inventory_hostname + '/' + system_user + '_pass.txt' +
       ' chars=ascii_letters,digits,!@#$%^&*()_+-= length=32') }}
-    system_user_salt: >-
+    base_system_user_salt: >-
       {{ lookup('ansible.builtin.password',
       playbook_dir + '/credentials/hosts/' + inventory_hostname + '/salts/' + system_user + '_salt.txt' +
       ' chars=ascii_letters,digits length=16') }}
+  when: base_manage_system_user_password | bool
 
-- name: Set user passwords
+- name: Set system user password
   ansible.builtin.user:
-    name: "{{ user_item.user }}"
-    password: "{{ user_item.pass | ansible.builtin.password_hash('sha512', user_item.salt) }}"
-  loop:
-    - { user: 'root', pass: "{{ root_password }}", salt: "{{ root_salt }}" }
-    - { user: "{{ ansible_user }}", pass: "{{ ansible_user_password }}", salt: "{{ ansible_user_salt }}" }
-    - { user: "{{ system_user }}", pass: "{{ system_user_password }}", salt: "{{ system_user_salt }}" }
-  loop_control:
-    loop_var: user_item
+    name: "{{ system_user }}"
+    password: "{{ base_system_user_password | ansible.builtin.password_hash('sha512', base_system_user_salt) }}"
+  when: base_manage_system_user_password | bool
   no_log: true
 
 # Cleanup and maintenance
@@ -515,7 +520,7 @@
 - name: Check for cloud-init config file
   ansible.builtin.stat:
     path: /etc/cloud/cloud.cfg
-  register: cloud_init_config_file
+  register: base_cloud_init_config_file
 
 - name: Create cloud-init disable file
   ansible.builtin.copy:
@@ -525,4 +530,4 @@
     mode: '0644'
     owner: root
     group: root
-  when: cloud_init_config_file.stat.exists
+  when: base_cloud_init_config_file.stat.exists

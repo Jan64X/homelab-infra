@@ -1,2 +1,10 @@
 ---
-# currently empty
+# Account authentication policy
+# Set to true to lock the local root account password hash.
+base_lock_root_password: true
+
+# Set to true to lock the ansible account password hash and allow SSH key auth only.
+base_lock_ansible_password: true
+
+# Keep system user password management enabled by default.
+base_manage_system_user_password: true

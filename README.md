@@ -18,6 +18,7 @@ This playbook assumes:
 - **Pre-configured hosts** with an `ansible` user (UID/GID 1000)
 - **SSH key-based authentication** already in place
 - **Passwordless sudo** configured for the ansible user
+- **Locked local passwords** for `root` and `ansible` accounts
 - **Debian 12/13** as the base operating system
 
 See [SETUP.md](SETUP.md) for detailed prerequisites and security considerations.
@@ -50,6 +51,7 @@ Each host can have multiple roles assigned via the `host_roles` variable in the 
 - **Idempotent Operations**: Safe to run multiple times
 - **Backup Integration**: NAS-based backup and restore capabilities
 - **Credential Management**: Automated password generation and secure storage
+- **Credential Management**: System user and service credential generation with host-scoped storage
 - **Dynamic Configuration**: Template-based configuration with Jinja2
 - **Monitoring Integration**: Node Exporter deployment on all managed hosts
 
@@ -128,6 +130,7 @@ Each host defines:
 - **Firewall Configuration**: UFW-based firewall rules per service
 - **Fail2Ban**: Intrusion prevention for SSH and web services
 - **Credential Isolation**: Per-host password generation and storage
+- **Locked Admin Accounts**: `root` and `ansible` passwords locked; SSH keys required
 - **Sudo Configuration**: Restricted privilege escalation
 
 ## 📊 Monitoring
