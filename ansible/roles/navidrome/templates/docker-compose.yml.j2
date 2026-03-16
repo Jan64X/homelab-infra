@@ -3,10 +3,19 @@ services:
     image: deluan/navidrome:latest
     user: 1000:1000 # should be owner of volumes
     ports:
-      - "80:4533"
+      - "127.0.0.1:{{ navidrome_bind_port }}:4533"
     restart: unless-stopped
     environment:
       ND_ENABLEINSIGHTSCOLLECTOR: false
     volumes:
       - "/opt/navidrome/data:/data"
       - "/mnt/music:/music:ro"
+    networks:
+      homelab:
+        aliases:
+          - navidrome
+
+networks:
+  homelab:
+    external: true
+    name: {{ docker_network_name }}

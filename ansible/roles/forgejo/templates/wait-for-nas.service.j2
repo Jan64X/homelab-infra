@@ -1,0 +1,12 @@
+[Unit]
+Description=Wait For NAS to be Online and Ready for CIFS
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'until nc -zvw1 {{ nas_ip }} 445; do sleep 1; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

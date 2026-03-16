@@ -1,25 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
-# Configuration
-# Load Restic Environment Variables
-source /opt/forgejo/restic-env.sh
+backup_dir="/mnt/forgejo-backups"
+timestamp="$(date '+%Y%m%d-%H%M%S')"
+db_archive="${backup_dir}/forgejo-db-${timestamp}.sql.zst"
+data_archive="${backup_dir}/forgejo-data-${timestamp}.tar.zst"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-# Check connectivity
-if [ -z "${RESTIC_REPOSITORY:-}" ]; then
-    log "ERROR: Restic environment variables not set."
+if ! mountpoint -q "$backup_dir"; then
+    log "ERROR: Forgejo backup share is not mounted at $backup_dir."
     exit 1
 fi
 
-log "Starting Forgejo Restic backup..."
+log "Starting Forgejo SMB backup..."
 
-# 1. Backup Database (Stream directly to Restic)
-# We use --stdin-filename so we can target it during restore
-log "Snapshotting Database..."
+log "Writing compressed database dump..."
 docker exec forgejo-db mysqldump \
     -uroot \
     -p{{ forgejo_db_root_password }} \
@@ -27,26 +25,12 @@ docker exec forgejo-db mysqldump \
     --skip-lock-tables \
     --routines \
     --triggers \
-    forgejo | restic backup \
-    --stdin \
-    --stdin-filename dump.sql \
-    --tag database \
-    --host {{ inventory_hostname }} \
-    --insecure-tls
+    forgejo | zstd -T0 -19 -o "$db_archive"
 
-# 2. Backup Files
-# We backup the data directory directly
-log "Snapshotting Data Directory..."
-restic backup /var/lib/forgejo/data \
-    --tag files \
-    --exclude /var/lib/forgejo/data/tmp \
-    --host {{ inventory_hostname }} \
-    --insecure-tls
+log "Writing compressed file archive..."
+tar --zstd -cpf "$data_archive" \
+    --exclude='var/lib/forgejo/data/tmp' \
+    -C / \
+    var/lib/forgejo/data
 
-# 3. MAINTENANCE NOTICE
-# We DO NOT prune here. 
-# This VM has an "Append-Only" (plus locks) policy.
-# Attempting to prune will result in Access Denied errors.
-# Pruning is handled by the central Admin server.
-
-log "Backup upload complete."
+log "Backup archive complete."

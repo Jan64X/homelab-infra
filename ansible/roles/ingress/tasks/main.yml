@@ -1,0 +1,123 @@
+---
+- name: Derive ingress routes from enabled roles
+  ansible.builtin.set_fact:
+    ingress_enabled_services: >-
+      {{ ingress_vhosts | default(ingress_services.keys() | list | select('in', host_roles | default([])) | list) }}
+
+- name: Verify ingress prerequisites
+  ansible.builtin.assert:
+    that:
+      - cloudflare_api_token is defined
+      - certbot_email is defined
+    fail_msg: Missing Cloudflare or certbot configuration for ingress role
+
+- name: Install ingress packages
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - python3-certbot-dns-cloudflare
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create ingress directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/ingress
+    - /opt/ingress/conf.d
+    - /opt/ingress/logs
+    - /opt/ingress/ssl
+
+- name: Write Cloudflare credentials for certbot
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/cloudflare.ini
+    mode: '0600'
+    content: |
+      dns_cloudflare_api_token = {{ cloudflare_api_token }}
+  no_log: true
+
+- name: Request wildcard certificate for homelab ingress
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly --dns-cloudflare
+      --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+      --dns-cloudflare-propagation-seconds 60
+      --non-interactive --agree-tos --email {{ certbot_email }}
+      --cert-name {{ ingress_cert_name }}
+      -d {{ homelab_base_domain }} -d *.{{ homelab_base_domain }}
+      --keep-until-expiring
+  args:
+    creates: "/etc/letsencrypt/live/{{ ingress_cert_name }}/fullchain.pem"
+
+- name: Ensure certbot renewal hooks directory exists
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    mode: '0755'
+
+- name: Install ingress cert reload hook
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/renewal-hooks/deploy/ingress_reload
+    mode: '0755'
+    content: |
+      #!/bin/sh
+      docker compose -f /opt/ingress/docker-compose.yml exec -T nginx nginx -s reload
+
+- name: Ensure certbot renewal timer is enabled
+  ansible.builtin.service:
+    name: certbot.timer
+    state: started
+    enabled: true
+
+- name: Generate ingress dhparams
+  community.crypto.openssl_dhparam:
+    path: /opt/ingress/ssl/dhparam.pem
+    size: 2048
+
+- name: Deploy ingress nginx.conf
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /opt/ingress/nginx.conf
+    mode: '0644'
+  notify: Restart ingress
+
+- name: Deploy ingress home-domain sink vhost
+  ansible.builtin.template:
+    src: home-domain.conf.j2
+    dest: /opt/ingress/conf.d/000-home-domain.conf
+    mode: '0644'
+  notify: Restart ingress
+
+- name: Deploy ingress vhost configs
+  ansible.builtin.template:
+    src: service.conf.j2
+    dest: "/opt/ingress/conf.d/{{ item }}.conf"
+    mode: '0644'
+  loop: "{{ ingress_enabled_services }}"
+  notify: Restart ingress
+
+- name: Deploy ingress docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/ingress/docker-compose.yml
+    mode: '0644'
+  notify: Restart ingress
+
+- name: Start ingress stack
+  community.docker.docker_compose_v2:
+    project_src: /opt/ingress
+    state: present
+    pull: always
+
+- name: Allow ingress ports through firewall
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '80'
+    - '443'
+  notify: Reload ufw

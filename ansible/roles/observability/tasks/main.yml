@@ -3,75 +3,16 @@
 # PACKAGE INSTALLATION
 # =============================================================================
 
-- name: Install required packages
+- name: Install observability host packages
   ansible.builtin.apt:
     name:
-      - ca-certificates
-      - curl
-      - gnupg
-      - lsb-release
       - python3-requests
-      - python3-docker
-      - restic
+      - cifs-utils
+      - netcat-openbsd
       - cron
+      - zstd
     state: present
     update_cache: true
-  become: true
-
-- name: Create directory for Docker GPG key
-  ansible.builtin.file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: '0755'
-  become: true
-
-- name: Add Docker GPG key
-  ansible.builtin.get_url:
-    url: https://download.docker.com/linux/debian/gpg
-    dest: /etc/apt/keyrings/docker.asc
-    mode: '0644'
-  become: true
-
-- name: Set Docker GPG key permissions
-  ansible.builtin.file:
-    path: /etc/apt/keyrings/docker.asc
-    mode: '0644'
-    owner: root
-    group: root
-  become: true
-
-- name: Get system architecture
-  ansible.builtin.command: dpkg --print-architecture
-  register: observability_system_arch
-  changed_when: false
-
-- name: Add Docker repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ observability_system_arch.stdout }}
-      signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/debian
-      {{ ansible_facts['distribution_release'] }} stable
-    state: present
-    filename: docker
-  become: true
-
-- name: Install Docker and Docker Compose plugin
-  ansible.builtin.apt:
-    name:
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-compose-plugin
-    state: present
-    update_cache: true
-  become: true
-
-- name: Ensure Docker service is running
-  ansible.builtin.service:
-    name: docker
-    state: started
-    enabled: true
   become: true
 
 # =============================================================================
@@ -99,13 +40,6 @@
     mode: '0700'
   delegate_to: localhost
   become: false
-
-- name: Generate Restic password
-  ansible.builtin.set_fact:
-    observability_restic_password: >-
-      {{ lookup('ansible.builtin.password',
-      playbook_dir + '/credentials/hosts/' + inventory_hostname +
-      '/restic_observability_password.txt chars=ascii_letters,digits length=32') }}
 
 - name: Generate Grafana admin password
   ansible.builtin.set_fact:
@@ -135,6 +69,7 @@
     - /var/lib/prometheus
     - /var/lib/grafana
     - /var/lib/loki
+    - /mnt/observability-backups
   loop_control:
     loop_var: directory_item
   become: true
@@ -164,60 +99,81 @@
   become: true
 
 # =============================================================================
-# RESTIC CONFIGURATION & DISCOVERY
+# BACKUP MOUNT & DISCOVERY
 # =============================================================================
 
-- name: Create Restic credentials file
-  ansible.builtin.template:
-    src: restic-env.sh.j2
-    dest: /etc/monitoring/restic-env.sh
+- name: Create Observability NAS credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ observability_nas_user }}
+      password={{ observability_nas_password }}
+    dest: /etc/observability-backup-nas-credentials
     mode: '0600'
     owner: root
     group: root
   become: true
+  no_log: true
 
-- name: Check for existing backups (Fresh Install Only)
-  ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
-    restic snapshots --json --latest 1 --insecure-tls || echo "[]"
-  args:
-    executable: /bin/bash
-  register: observability_restic_check
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
   become: true
+  notify: Reload systemd
+
+- name: Create Observability backup mount unit
+  ansible.builtin.template:
+    src: mnt-observability-backups.mount.j2
+    dest: /etc/systemd/system/mnt-observability\x2dbackups.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start Observability backup mount
+  ansible.builtin.systemd:
+    name: mnt-observability\x2dbackups.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Verify Observability backup mount is active
+  ansible.builtin.command: mountpoint -q /mnt/observability-backups
+  register: observability_backup_mount_check
   changed_when: false
+  become: true
+
+- name: Find Observability backup archives
+  ansible.builtin.find:
+    paths: /mnt/observability-backups
+    patterns: "observability-state-*.tar.zst"
+    use_regex: false
+  register: observability_backup_files
   when: observability_is_fresh_install
-
-- name: Check Restic repository status
-  ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
-    restic snapshots --json --latest 1 --insecure-tls </dev/null
-  args:
-    executable: /bin/bash
-  register: observability_restic_check_result
-  become: true
-  changed_when: false
-  failed_when: false
-
-- name: Initialize Restic repository if missing
-  ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
-    restic init --insecure-tls
-  args:
-    executable: /bin/bash
-  become: true
-  changed_when: true
-  when:
-    - observability_restic_check_result.rc != 0
-    - >-
-      'unable to open config file' in observability_restic_check_result.stderr or
-      'Is there a repository' in observability_restic_check_result.stderr
 
 - name: Determine if restore is needed
   ansible.builtin.set_fact:
-    observability_backup_found: >-
-      {{ (observability_restic_check.stdout | default('[]') |
-      from_json | length > 0) }}
+    observability_backup_found: "{{ observability_backup_files.files | default([]) | length > 0 }}"
   when: observability_is_fresh_install
+
+- name: Set latest Observability backup file
+  ansible.builtin.set_fact:
+    observability_latest_backup: "{{ observability_backup_files.files | sort(attribute='mtime') | last }}"
+  when:
+    - observability_is_fresh_install
+    - observability_backup_found
 
 # =============================================================================
 # CONFIGURATION FILES
@@ -229,6 +185,7 @@
     dest: /etc/monitoring/prometheus/prometheus.yml
     mode: '0644'
   become: true
+  notify: Restart monitoring stack
 
 - name: Configure Loki
   ansible.builtin.template:
@@ -262,6 +219,24 @@
 # DOCKER COMPOSE DEPLOYMENT
 # =============================================================================
 
+- name: Stop monitoring stack before WAL repair
+  community.docker.docker_compose_v2:
+    project_src: /etc/monitoring
+    state: absent
+  become: true
+  when: observability_repair_wal | default(false) | bool
+
+- name: Remove potentially corrupted WAL directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/prometheus/wal
+    - /var/lib/prometheus/chunks_head
+    - /var/lib/loki/wal
+  become: true
+  when: observability_repair_wal | default(false) | bool
+
 - name: Start monitoring stack
   community.docker.docker_compose_v2:
     project_src: /etc/monitoring
@@ -271,78 +246,41 @@
 
 - name: Wait for Prometheus to be ready
   ansible.builtin.wait_for:
-    port: 9090
+    port: "{{ observability_prometheus_port }}"
     delay: 10
     timeout: 120
 
 - name: Wait for Grafana to be ready
   ansible.builtin.wait_for:
-    port: 80
+    port: "{{ observability_grafana_port }}"
     delay: 10
     timeout: 120
 
 - name: Wait for Loki to be ready
   ansible.builtin.wait_for:
-    port: 3100
+    port: "{{ observability_loki_port }}"
     delay: 10
     timeout: 120
 
 # =============================================================================
-# RESTORE FROM RESTIC (Fresh Install Only)
+# RESTORE FROM SMB ARCHIVE (Fresh Install Only)
 # =============================================================================
 
-- name: Restore Prometheus data from Restic
+- name: Restore Observability data from SMB archive
   ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
     cd /etc/monitoring
     docker compose down
-    restic restore latest --tag observability-prometheus --target / --insecure-tls
+    tar --zstd -xpf "{{ observability_latest_backup.path }}" -C /
     chown -R 65534:65534 /var/lib/prometheus
-    docker compose up -d
-  args:
-    executable: /bin/bash
-  become: true
-  register: observability_prometheus_restore_result
-  changed_when: observability_prometheus_restore_result.rc == 0
-  failed_when: observability_prometheus_restore_result.rc != 0
-  when:
-    - observability_is_fresh_install
-    - observability_backup_found
-    - not (observability_force_fresh | default(false))
-
-- name: Restore Grafana data from Restic
-  ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
-    cd /etc/monitoring
-    docker compose down
-    restic restore latest --tag observability-grafana --target / --insecure-tls
     chown -R 472:472 /var/lib/grafana
-    docker compose up -d
-  args:
-    executable: /bin/bash
-  become: true
-  register: observability_grafana_restore_result
-  changed_when: observability_grafana_restore_result.rc == 0
-  failed_when: observability_grafana_restore_result.rc != 0
-  when:
-    - observability_is_fresh_install
-    - observability_backup_found
-    - not (observability_force_fresh | default(false))
-
-- name: Restore Loki data from Restic
-  ansible.builtin.shell: |
-    source /etc/monitoring/restic-env.sh
-    cd /etc/monitoring
-    docker compose down
-    restic restore latest --tag observability-loki --target / --insecure-tls
     chown -R 10001:10001 /var/lib/loki
     docker compose up -d
   args:
     executable: /bin/bash
   become: true
-  register: observability_loki_restore_result
-  changed_when: observability_loki_restore_result.rc == 0
-  failed_when: observability_loki_restore_result.rc != 0
+  register: observability_restore_result
+  changed_when: observability_restore_result.rc == 0
+  failed_when: observability_restore_result.rc != 0
   when:
     - observability_is_fresh_install
     - observability_backup_found
@@ -354,9 +292,9 @@
     delay: 10
     timeout: 120
   loop:
-    - 9090
-    - 80
-    - 3100
+    - "{{ observability_prometheus_port }}"
+    - "{{ observability_grafana_port }}"
+    - "{{ observability_loki_port }}"
   when:
     - observability_is_fresh_install
     - observability_backup_found
@@ -373,11 +311,28 @@
     mode: '0755'
   become: true
 
+- name: Find legacy observability backup environment files
+  ansible.builtin.find:
+    paths: /etc/monitoring
+    patterns: "r*ic-env.sh"
+    file_type: file
+    recurse: false
+  register: observability_legacy_backup_env_files
+  become: true
+
+- name: Remove legacy observability backup environment files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ observability_legacy_backup_env_files.files }}"
+  become: true
+
 - name: Create backup cron job
   ansible.builtin.cron:
-    name: "Observability daily backup"
+    name: "Observability weekly backup"
     minute: "0"
     hour: "4"
+    weekday: "0"
     job: "/etc/monitoring/backup.sh >> /var/log/observability-backup.log 2>&1"
     user: root
   become: true
@@ -410,33 +365,6 @@
     force: false
   become: true
 
-- name: Allow Grafana HTTP
-  community.general.ufw:
-    rule: allow
-    port: 80
-    proto: tcp
-  notify: Reload ufw
-
-- name: Get promtail host IPs
-  ansible.builtin.set_fact:
-    observability_promtail_ips: >-
-      {{ groups['all'] |
-      map('extract', hostvars) |
-      selectattr('host_roles', 'defined') |
-      selectattr('host_roles', 'contains', 'promtail-hl') |
-      map(attribute='ansible_host') |
-      list }}
-
-- name: Allow Loki from promtail hosts
-  community.general.ufw:
-    rule: allow
-    port: 3100
-    proto: tcp
-    from_ip: "{{ item }}"
-  loop: "{{ observability_promtail_ips }}"
-  when: observability_promtail_ips | length > 0
-  notify: Reload ufw
-
 # =============================================================================
 # FIRST RUN INSTRUCTIONS
 # =============================================================================
@@ -448,20 +376,20 @@
       Observability stack installation complete!
 
       {% if observability_is_fresh_install and observability_backup_found %}
-      Restored from Restic backup
+      Restored from SMB backup archive
       Your Prometheus, Grafana, and Loki instances should be ready with all previous data.
       {% elif observability_is_fresh_install %}
       Fresh installation - no backup found to restore
-      Access Grafana at: http://{{ ansible_host }}
+      Access Grafana at: https://{{ observability_domain }}
       Username: admin
       Password: {{ observability_grafana_admin_password }}
       {% else %}
       Existing installation updated
       {% endif %}
 
-      Grafana: http://{{ ansible_host }}
-      Prometheus: http://{{ ansible_host }}:9090
-      Loki: http://{{ ansible_host }}:3100
+      Grafana: https://{{ observability_domain }}
+      Prometheus: http://127.0.0.1:{{ observability_prometheus_port }}
+      Loki: http://127.0.0.1:{{ observability_loki_port }}
       ===================================================================
   when: >-
     observability_is_fresh_install or

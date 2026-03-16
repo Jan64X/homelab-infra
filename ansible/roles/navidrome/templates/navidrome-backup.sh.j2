@@ -1,41 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
-# Configuration
-# Load Restic Environment Variables
-source /opt/navidrome/restic-env.sh
+backup_dir="/mnt/navidrome-backups"
+timestamp="$(date '+%Y%m%d-%H%M%S')"
+archive_path="${backup_dir}/navidrome-data-${timestamp}.tar.zst"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-# Check connectivity
-if [ -z "${RESTIC_REPOSITORY:-}" ]; then
-    log "ERROR: Restic environment variables not set."
+if ! mountpoint -q "$backup_dir"; then
+    log "ERROR: Navidrome backup share is not mounted at $backup_dir."
     exit 1
 fi
 
-log "Starting Navidrome Restic backup..."
+log "Starting Navidrome SMB backup..."
 
-# Backup Navidrome Database
-# Stop container, backup database, restart
 log "Stopping Navidrome container for consistent backup..."
 cd /opt/navidrome
 docker compose down
 
-log "Snapshotting Navidrome database..."
-restic backup /opt/navidrome/data/navidrome.db \
-    --tag navidrome-db \
-    --host {{ inventory_hostname }} \
-    --insecure-tls
+log "Writing compressed data archive..."
+tar --zstd -cpf "$archive_path" -C / opt/navidrome/data
 
 log "Starting Navidrome container..."
 docker compose up -d
 
-# MAINTENANCE NOTICE
-# We DO NOT prune here. 
-# This VM has an "Append-Only" (plus locks) policy.
-# Attempting to prune will result in Access Denied errors.
-# Pruning is handled by the central Admin server.
-
-log "Backup upload complete."
+log "Backup archive complete."

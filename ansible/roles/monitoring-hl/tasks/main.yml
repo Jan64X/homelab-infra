@@ -89,7 +89,7 @@
       User=node_exporter
       Group=node_exporter
       Type=simple
-      ExecStart=/usr/local/bin/node_exporter
+      ExecStart=/usr/local/bin/node_exporter --collector.systemd --collector.processes
 
       [Install]
       WantedBy=multi-user.target
@@ -107,9 +107,10 @@
     enabled: true
   become: true
 
-- name: Allow node_exporter port
+- name: Restrict node_exporter port to Docker bridge networks
   community.general.ufw:
     rule: allow
+    src: 172.16.0.0/12
     port: 9100
     proto: tcp
 
@@ -211,8 +212,9 @@
     enabled: true
   become: true
 
-- name: Allow fail2ban_exporter port
+- name: Restrict fail2ban_exporter port to Docker bridge networks
   community.general.ufw:
     rule: allow
+    src: 172.16.0.0/12
     port: 9191
     proto: tcp

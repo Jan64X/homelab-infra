@@ -2,11 +2,11 @@
 # ntfy Docker image version
 ntfy_version: "latest"
 
-# Network port
-ntfy_port: 80
+# Local host bind port for health checks
+ntfy_bind_port: 8081
 
 # Domain configuration
-ntfy_domain: "ntfy.{{ unbound.domain }}"
+ntfy_domain: "{{ homelab_service_domains.ntfy | default('ntfy.' ~ homelab_base_domain) }}"
 
 # Base URL (used by ntfy for self-referencing links)
 ntfy_base_url: "https://{{ ntfy_domain }}"

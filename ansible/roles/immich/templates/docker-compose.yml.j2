@@ -23,13 +23,18 @@ services:
     env_file:
       - .env
     ports:
-      - '80:2283'
+      - '127.0.0.1:{{ immich_bind_port }}:2283'
     depends_on:
       - redis
       - database
     restart: "no"
     healthcheck:
       disable: false
+    networks:
+      default:
+      homelab:
+        aliases:
+          - immich-server
 
   immich-machine-learning:
     container_name: immich_machine_learning
@@ -46,6 +51,8 @@ services:
     restart: "no"
     healthcheck:
       disable: false
+    networks:
+      - default
 
   redis:
     container_name: immich_redis
@@ -53,6 +60,8 @@ services:
     healthcheck:
       test: redis-cli ping || exit 1
     restart: "no"
+    networks:
+      - default
 
   database:
     container_name: immich_postgres
@@ -69,6 +78,13 @@ services:
       - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
     shm_size: 128mb
     restart: "no"
+    networks:
+      - default
 
 volumes:
   model-cache:
+
+networks:
+  homelab:
+    external: true
+    name: {{ docker_network_name }}

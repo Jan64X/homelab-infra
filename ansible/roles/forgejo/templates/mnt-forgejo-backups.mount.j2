@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount NAS backup share for Forgejo
+After=wait-for-nas.service
+Requires=wait-for-nas.service
+
+[Mount]
+What={{ forgejo_backup_share }}
+Where=/mnt/forgejo-backups
+Type=cifs
+Options=credentials=/etc/forgejo-backup-nas-credentials,uid=0,gid=0,iocharset=utf8,vers=3.0,_netdev,x-systemd.device-timeout=30s
+
+[Install]
+WantedBy=multi-user.target

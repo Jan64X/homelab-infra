@@ -10,6 +10,27 @@ sysadmin_ssh_keys:
 # Backward compatibility: sysadmin_ssh_key for roles that expect a single key
 sysadmin_ssh_key: "{{ sysadmin_ssh_keys | join('\n') }}"
 
+# =============================================================================
+# SINGLE-HOST HOMELAB ROUTING
+# =============================================================================
+public_base_domain: "example.com"
+homelab_base_domain: "home.{{ public_base_domain }}"
+docker_network_name: homelab-services
+ingress_vhosts:
+  - observability
+  - forgejo
+  - immich
+  - navidrome
+  - ntfy
+  - seedbox
+homelab_service_domains:
+  immich: "photos.{{ homelab_base_domain }}"
+  forgejo: "git.{{ homelab_base_domain }}"
+  navidrome: "music.{{ homelab_base_domain }}"
+  ntfy: "ntfy.{{ homelab_base_domain }}"
+  observability: "monitoring.{{ homelab_base_domain }}"
+  seedbox: "torrents.{{ homelab_base_domain }}"
+
 # NAS IP address (adjust to your network)
 nas_ip: "x.x.x.x"
 
@@ -20,22 +41,20 @@ observability_force_fresh: false
 immich_force_restore: false
 
 # =============================================================================
-# MINIO / RESTIC BACKUP (homelab-only services)
+# SMB BACKUPS (homelab-only services)
 # =============================================================================
-minio_endpoint: "https://nas.core.lan:9000"
-
-# Navidrome backup and NAS mount configuration
-minio_navidrome_bucket: "navidrome-backups"
-minio_navidrome_access_key: "navidrome-user"
-minio_navidrome_secret_key: "placeholder"
 navidrome_nas_user: "someuser"
 navidrome_nas_password: "placeholder"
 navidrome_music_share: "//{{ nas_ip }}/tank/Media/Music"
+navidrome_backup_share: "//{{ nas_ip }}/tank/Server/navidrome"
 
-# Observability (Prometheus + Grafana) backup configuration
-minio_observability_bucket: "observability-backups"
-minio_observability_access_key: "observability-user"
-minio_observability_secret_key: "placeholder"
+forgejo_nas_user: "someuser"
+forgejo_nas_password: "placeholder"
+forgejo_backup_share: "//{{ nas_ip }}/tank/Server/forgejo"
+
+observability_nas_user: "someuser"
+observability_nas_password: "placeholder"
+observability_backup_share: "//{{ nas_ip }}/tank/Server/observability"
 
 # Torrent-Down NAS mount configuration (read-write)
 torrentdown_nas_user: "someuser"

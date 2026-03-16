@@ -1,0 +1,35 @@
+---
+ingress_cert_name: "{{ homelab_base_domain }}"
+ingress_enabled_services: []
+ingress_services:
+  observability:
+    domain: "{{ homelab_service_domains.observability | default('monitoring.' ~ homelab_base_domain) }}"
+    backend_server: "http://grafana:3000"
+    client_max_body_size: 64M
+    proxy_read_timeout: 300
+  forgejo:
+    domain: "{{ homelab_service_domains.forgejo | default('git.' ~ homelab_base_domain) }}"
+    backend_server: "http://forgejo:3000"
+    client_max_body_size: 256M
+    proxy_read_timeout: 300
+  immich:
+    domain: "{{ homelab_service_domains.immich | default('photos.' ~ homelab_base_domain) }}"
+    backend_server: "http://immich-server:2283"
+    client_max_body_size: 1024M
+    proxy_read_timeout: 600
+  navidrome:
+    domain: "{{ homelab_service_domains.navidrome | default('music.' ~ homelab_base_domain) }}"
+    backend_server: "http://navidrome:4533"
+    client_max_body_size: 256M
+    proxy_read_timeout: 300
+  ntfy:
+    domain: "{{ homelab_service_domains.ntfy | default('ntfy.' ~ homelab_base_domain) }}"
+    backend_server: "http://ntfy:80"
+    client_max_body_size: 256M
+    proxy_read_timeout: 86400
+  seedbox:
+    domain: "{{ homelab_service_domains.seedbox | default('torrents.' ~ homelab_base_domain) }}"
+    backend_server: "http://seedbox-nginx:80"
+    client_max_body_size: 1024M
+    proxy_read_timeout: 300
+

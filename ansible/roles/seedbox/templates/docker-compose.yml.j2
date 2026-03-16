@@ -45,16 +45,20 @@ services:
   nginx:
     container_name: seedbox_nginx
     image: nginx:alpine
-    ports:
-      - "80:80"
     volumes:
       - /opt/seedbox/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - gluetun
     restart: unless-stopped
     networks:
-      - seedbox_network
+      seedbox_network:
+      homelab:
+        aliases:
+          - seedbox-nginx
 
 networks:
   seedbox_network:
     driver: bridge
+  homelab:
+    external: true
+    name: {{ docker_network_name }}

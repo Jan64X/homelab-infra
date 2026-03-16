@@ -1,5 +1,8 @@
 ---
 # Default variables for navidrome role
 
+navidrome_domain: "{{ homelab_service_domains.navidrome | default('music.' ~ homelab_base_domain) }}"
+navidrome_bind_port: 4533
+
 # Set to true to skip automatic restore from backup on fresh install
 navidrome_force_fresh: false

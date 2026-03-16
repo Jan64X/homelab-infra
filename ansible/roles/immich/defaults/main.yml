@@ -3,6 +3,8 @@
 
 # Timezone for immich (override in group_vars or host_vars if needed)
 immich_timezone: "Europe/Prague"
+immich_domain: "{{ homelab_service_domains.immich | default('photos.' ~ homelab_base_domain) }}"
+immich_bind_port: 2283
 
 # Immich version to use
 immich_version: "release"

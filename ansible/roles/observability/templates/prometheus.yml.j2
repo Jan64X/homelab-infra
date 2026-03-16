@@ -11,50 +11,21 @@ scrape_configs:
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
-    scrape_interval: 10s
-    metrics_path: /metrics
+    scrape_interval: 15s
     
-  - job_name: 'node-exporter'
-    scrape_interval: 15s
-    metrics_path: /metrics
+  - job_name: 'node'
     static_configs:
-{% for host in groups['all'] %}
-{% if hostvars[host]['ansible_host'] is defined and 'monitoring-hl' in hostvars[host].get('host_roles', []) %}
-      - targets: ['{{ hostvars[host]['ansible_host'] }}:9100']
+      - targets: ['{{ ansible_host | default("127.0.0.1") }}:9100']
         labels:
-          service: 'node-exporter'
+          instance: '{{ hostname | default(inventory_hostname) }}'
           env: 'homelab'
-          hostname: '{{ hostvars[host].get('hostname', host) }}'
-{% endif %}
-{% endfor %}
-    relabel_configs:
-      # Preserve original instance (IP:port) as host_address
-      - source_labels: [__address__]
-        target_label: host_address
-      # Replace instance label with hostname for better readability
-      - source_labels: [hostname]
-        target_label: instance
   
-  - job_name: 'fail2ban-exporter'
-    scrape_interval: 15s
-    metrics_path: /metrics
+  - job_name: 'fail2ban'
     static_configs:
-{% for host in groups['all'] %}
-{% if hostvars[host]['ansible_host'] is defined and 'monitoring-hl' in hostvars[host].get('host_roles', []) %}
-      - targets: ['{{ hostvars[host]['ansible_host'] }}:9191']
+      - targets: ['{{ ansible_host | default("127.0.0.1") }}:9191']
         labels:
-          service: 'fail2ban-exporter'
+          instance: '{{ hostname | default(inventory_hostname) }}'
           env: 'homelab'
-          hostname: '{{ hostvars[host].get('hostname', host) }}'
-{% endif %}
-{% endfor %}
-    relabel_configs:
-      # Preserve original instance (IP:port) as host_address
-      - source_labels: [__address__]
-        target_label: host_address
-      # Replace instance label with hostname for better readability
-      - source_labels: [hostname]
-        target_label: instance
   
   - job_name: 'grafana'
     static_configs:
@@ -63,4 +34,3 @@ scrape_configs:
           service: 'grafana'
           env: 'homelab'
     scrape_interval: 30s
-    metrics_path: /metrics

@@ -2,7 +2,7 @@ all:
   children:
     homelab:
       hosts:
-        seedbox:
+        homelab-vm:
           ansible_host: x.x.x.x
           ansible_user: ansible
           ansible_python_interpreter: /usr/bin/python3
@@ -11,77 +11,15 @@ all:
           os_family: Debian
           host_roles:
             - base
-            - monitoring-hl
-            - seedbox
-          hostname: seedbox
-        immich:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - immich
-          hostname: immich
-        observability:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
+            - docker
+            - ingress
             - observability
-          hostname: observability
-        navidrome:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
             - monitoring-hl
+            - promtail-hl
+            - forgejo
+            - immich
             - navidrome
-          hostname: navidrome
-        unificontroller:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - unificontroller
-          hostname: unificontroller
-        unbound:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
-            - unbound
-          hostname: unbound
-        ntfy:
-          ansible_host: x.x.x.x
-          ansible_user: ansible
-          ansible_python_interpreter: /usr/bin/python3
-          ansible_become_method: sudo
-          system_shell: /bin/bash
-          os_family: Debian
-          host_roles:
-            - base
-            - monitoring-hl
             - ntfy
-          hostname: ntfy
+#            - seedbox
+          hostname: homelab-vm
+

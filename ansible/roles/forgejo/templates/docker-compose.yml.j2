@@ -1,6 +1,9 @@
 networks:
   forgejo:
     external: false
+  homelab:
+    external: true
+    name: {{ docker_network_name }}
 
 services:
   server:
@@ -8,9 +11,12 @@ services:
     image: codeberg.org/forgejo/forgejo:{{ forgejo_version | default('13') }}
     restart: unless-stopped
     networks:
-      - forgejo
+      forgejo:
+      homelab:
+        aliases:
+          - forgejo
     ports:
-      - "0.0.0.0:{{ forgejo_port | default('3000') }}:3000"
+      - "127.0.0.1:{{ forgejo_port | default('3001') }}:3000"
       - "0.0.0.0:{{ forgejo_ssh_port | default('2222') }}:22"
     volumes:
       - /var/lib/forgejo/data:/data
@@ -24,6 +30,9 @@ services:
       - FORGEJO__database__NAME=forgejo
       - FORGEJO__database__USER=forgejo
       - FORGEJO__database__PASSWD={{ forgejo_db_password }}
+      - FORGEJO__server__DOMAIN={{ forgejo_domain }}
+      - FORGEJO__server__ROOT_URL={{ forgejo_root_url }}
+      - FORGEJO__server__SSH_DOMAIN={{ forgejo_domain }}
     depends_on:
       - db
     cap_drop:

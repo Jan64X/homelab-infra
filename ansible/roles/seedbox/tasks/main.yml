@@ -1,66 +1,12 @@
 ---
-- name: Install required packages for Docker repository
+- name: Install seedbox host packages
   ansible.builtin.apt:
     name:
-      - ca-certificates
-      - curl
-      - gnupg
-      - lsb-release
       - cifs-utils
       - netcat-openbsd
       - python3
     state: present
     update_cache: true
-
-- name: Create directory for Docker GPG key
-  ansible.builtin.file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: '0755'
-
-- name: Add Docker GPG key
-  ansible.builtin.get_url:
-    url: https://download.docker.com/linux/debian/gpg
-    dest: /etc/apt/keyrings/docker.asc
-    mode: '0644'
-
-- name: Set Docker GPG key permissions
-  ansible.builtin.file:
-    path: /etc/apt/keyrings/docker.asc
-    mode: '0644'
-    owner: root
-    group: root
-
-- name: Get system architecture
-  ansible.builtin.command: dpkg --print-architecture
-  register: seedbox_system_arch
-  changed_when: false
-
-- name: Add Docker repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ seedbox_system_arch.stdout }}
-      signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/debian
-      {{ ansible_facts['distribution_release'] }} stable
-    state: present
-    filename: docker
-
-- name: Install Docker and Docker Compose plugin
-  ansible.builtin.apt:
-    name:
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-compose-plugin
-    state: present
-    update_cache: true
-
-- name: Ensure Docker service is running
-  ansible.builtin.service:
-    name: docker
-    state: started
-    enabled: true
 
 - name: Ensure credentials directory exists
   ansible.builtin.file:
@@ -337,18 +283,11 @@
     group: root
   when: not seedbox_setup_complete_check.stat.exists
 
-- name: Allow HTTP port for qBittorrent WebUI through firewall
-  community.general.ufw:
-    rule: allow
-    port: 80
-    proto: tcp
-  notify: Reload ufw
-
 - name: Final setup summary
   ansible.builtin.debug:
     msg:
       - "=== SEEDBOX SETUP COMPLETE ==="
-      - "qBittorrent WebUI: http://{{ ansible_facts['default_ipv4']['address'] }}:80"
+      - "qBittorrent WebUI: https://{{ homelab_service_domains.seedbox | default('torrents.' ~ homelab_base_domain) }}"
       - >
         {% if not seedbox_setup_complete_check.stat.exists %}
         Initial password: {{ seedbox_initial_password }}

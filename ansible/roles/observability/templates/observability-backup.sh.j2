@@ -1,8 +1,14 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Source Restic environment
-source /etc/monitoring/restic-env.sh
+backup_dir="/mnt/observability-backups"
+timestamp="$(date '+%Y%m%d-%H%M%S')"
+archive_path="${backup_dir}/observability-state-${timestamp}.tar.zst"
+
+if ! mountpoint -q "$backup_dir"; then
+    echo "ERROR: Observability backup share is not mounted at $backup_dir"
+    exit 1
+fi
 
 echo "===== Observability Backup Started: $(date) ====="
 
@@ -11,35 +17,11 @@ echo "Stopping services..."
 cd /etc/monitoring
 docker compose down
 
-# Backup Prometheus data
-echo "Backing up Prometheus data..."
-restic backup /var/lib/prometheus \
-    --tag observability-prometheus \
-    --insecure-tls
-
-# Backup Grafana data
-echo "Backing up Grafana data..."
-restic backup /var/lib/grafana \
-    --tag observability-grafana \
-    --insecure-tls
-
-# Backup Loki data
-echo "Backing up Loki data..."
-restic backup /var/lib/loki \
-    --tag observability-loki \
-    --insecure-tls
+echo "Writing compressed state archive..."
+tar --zstd -cpf "$archive_path" -C / var/lib/prometheus var/lib/grafana var/lib/loki
 
 # Restart services
 echo "Restarting services..."
 docker compose up -d
-
-# Commented out, backups are now append-only
-# Prune old backups (keep last 30 daily, 12 monthly)
-#echo "Pruning old backups..."
-#restic forget \
-#    --keep-daily 30 \
-#    --keep-monthly 12 \
-#    --prune \
-#    --insecure-tls
 
 echo "===== Observability Backup Completed: $(date) ====="

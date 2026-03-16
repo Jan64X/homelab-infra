@@ -1,3 +1,8 @@
 ---
 # Observability role defaults
 observability_force_fresh: false
+observability_domain: "{{ homelab_service_domains.observability | default('monitoring.' ~ homelab_base_domain) }}"
+observability_grafana_port: 3000
+observability_prometheus_port: 9090
+observability_loki_port: 3100
+observability_repair_wal: false

@@ -1,0 +1,13 @@
+---
+docker_network_name: homelab-services
+docker_apt_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - python3-docker
+docker_engine_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin

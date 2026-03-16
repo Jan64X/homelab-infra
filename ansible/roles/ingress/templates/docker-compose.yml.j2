@@ -1,0 +1,26 @@
+services:
+  nginx:
+    container_name: ingress-nginx
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - /opt/ingress/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/ingress/conf.d:/etc/nginx/conf.d:ro
+      - /opt/ingress/ssl/dhparam.pem:/etc/nginx/dhparam.pem:ro
+      - /opt/ingress/logs:/var/log/nginx
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/nginx_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - ingress
+
+networks:
+  ingress:
+    external: true
+    name: {{ docker_network_name }}

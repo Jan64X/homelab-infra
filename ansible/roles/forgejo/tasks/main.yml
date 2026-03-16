@@ -3,62 +3,16 @@
 # PACKAGE INSTALLATION
 # =============================================================================
 
-- name: Install required packages
+- name: Install forgejo host packages
   ansible.builtin.apt:
     name:
-      - ca-certificates
-      - curl
-      - gnupg
-      - python3-docker
-      - restic
+      - cifs-utils
       - default-mysql-client
+      - netcat-openbsd
       - cron
+      - zstd
     state: present
     update_cache: true
-  become: true
-
-- name: Create directory for Docker GPG key
-  ansible.builtin.file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: '0755'
-  become: true
-
-- name: Add Docker GPG key
-  ansible.builtin.get_url:
-    url: https://download.docker.com/linux/debian/gpg
-    dest: /etc/apt/keyrings/docker.asc
-    mode: '0644'
-  become: true
-
-- name: Get system architecture
-  ansible.builtin.command: dpkg --print-architecture
-  register: system_arch
-  changed_when: false
-
-- name: Add Docker repository
-  ansible.builtin.apt_repository:
-    repo: "deb [arch={{ system_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
-    state: present
-    filename: docker
-  become: true
-
-- name: Install Docker and Docker Compose plugin
-  ansible.builtin.apt:
-    name:
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-compose-plugin
-    state: present
-    update_cache: true
-  become: true
-
-- name: Ensure Docker service is running
-  ansible.builtin.service:
-    name: docker
-    state: started
-    enabled: true
   become: true
 
 # =============================================================================
@@ -73,6 +27,14 @@
 - name: Set installation type
   ansible.builtin.set_fact:
     is_fresh_install: "{{ not forgejo_existing.stat.exists }}"
+
+- name: Decide whether backup restore path should run
+  ansible.builtin.set_fact:
+    forgejo_should_attempt_restore: >-
+      {{
+        (is_fresh_install or (forgejo_force_restore_from_backup | default(false))) and
+        not (forgejo_force_fresh | default(false))
+      }}
 
 # =============================================================================
 # CREDENTIALS GENERATION
@@ -94,9 +56,6 @@
     forgejo_db_root_password: "{{ lookup('ansible.builtin.password',
                               playbook_dir + '/credentials/hosts/' + inventory_hostname + '/forgejo_db_root_password.txt' +
                               ' chars=ascii_letters,digits length=32') }}"
-    restic_forgejo_password: "{{ lookup('ansible.builtin.password',
-                              playbook_dir + '/credentials/hosts/' + inventory_hostname + '/restic_forgejo_password.txt' +
-                              ' chars=ascii_letters,digits length=32') }}"
 
 # =============================================================================
 # DIRECTORY STRUCTURE
@@ -104,70 +63,107 @@
 
 - name: Create Forgejo directories
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
     mode: '0755'
-    owner: '1000'
-    group: '1000'
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
   loop:
-    - /opt/forgejo
-    - /opt/forgejo/data
-    - /opt/forgejo/mysql
+    - { path: /opt/forgejo, owner: '1000', group: '1000' }
+    - { path: /var/lib/forgejo/data, owner: '1000', group: '1000' }
+    - { path: /var/lib/forgejo/mysql, owner: '1000', group: '1000' }
+    - { path: /mnt/forgejo-backups, owner: '0', group: '0' }
   become: true
 
 # =============================================================================
-# RESTIC CONFIGURATION & DISCOVERY
+# NAS BACKUP MOUNT & DISCOVERY
 # =============================================================================
 
-- name: Create Restic credentials file
-  ansible.builtin.template:
-    src: restic-env.sh.j2
-    dest: /opt/forgejo/restic-env.sh
+- name: Create Forgejo NAS credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ forgejo_nas_user }}
+      password={{ forgejo_nas_password }}
+    dest: /etc/forgejo-backup-nas-credentials
     mode: '0600'
     owner: root
     group: root
   become: true
+  no_log: true
 
-- name: Check for existing backups (Fresh Install Only)
-  ansible.builtin.shell: |
-    source /opt/forgejo/restic-env.sh
-    restic snapshots --json --latest 1 --insecure-tls || echo "[]"
-  args:
-    executable: /bin/bash
-  register: restic_check
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
   become: true
+  notify: Reload systemd
+
+- name: Create Forgejo backup mount unit
+  ansible.builtin.template:
+    src: mnt-forgejo-backups.mount.j2
+    dest: /etc/systemd/system/mnt-forgejo\x2dbackups.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start Forgejo backup mount
+  ansible.builtin.systemd:
+    name: mnt-forgejo\x2dbackups.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Verify Forgejo backup mount is active
+  ansible.builtin.command: mountpoint -q /mnt/forgejo-backups
+  register: forgejo_backup_mount_check
   changed_when: false
-  when: is_fresh_install
-
-- name: Check Restic repository status
-  ansible.builtin.shell: |
-    source /opt/forgejo/restic-env.sh
-    # </dev/null prevents hanging if it asks for a password
-    restic snapshots --json --latest 1 --insecure-tls </dev/null
-  args:
-    executable: /bin/bash
-  register: restic_check_result
   become: true
-  changed_when: false
-  # Don't fail the playbook if this command fails (it will fail if repo is empty)
-  failed_when: false
 
-- name: Initialize Restic repository if missing
-  ansible.builtin.shell: |
-    source /opt/forgejo/restic-env.sh
-    restic init --insecure-tls
-  args:
-    executable: /bin/bash
-  become: true
-  # Only init if the previous command failed AND the error indicates a missing config
-  when: 
-    - restic_check_result.rc != 0
-    - "'unable to open config file' in restic_check_result.stderr or 'Is there a repository' in restic_check_result.stderr"
+- name: Find Forgejo data backups
+  ansible.builtin.find:
+    paths: /mnt/forgejo-backups
+    patterns: "forgejo-data-*.tar.zst"
+    use_regex: false
+  register: forgejo_data_backups
+  when: forgejo_should_attempt_restore
+
+- name: Find Forgejo database backups
+  ansible.builtin.find:
+    paths: /mnt/forgejo-backups
+    patterns: "forgejo-db-*.sql.zst"
+    use_regex: false
+  register: forgejo_db_backups
+  when: forgejo_should_attempt_restore
 
 - name: Determine if restore is needed
   ansible.builtin.set_fact:
-    backup_found: "{{ (restic_check.stdout | default('[]') | from_json | length > 0) }}"
-  when: is_fresh_install
+    backup_found: >-
+      {{
+        (forgejo_data_backups.files | default([]) | length > 0) and
+        (forgejo_db_backups.files | default([]) | length > 0)
+      }}
+  when: forgejo_should_attempt_restore
+
+- name: Set latest Forgejo backup files
+  ansible.builtin.set_fact:
+    forgejo_latest_data_backup: "{{ forgejo_data_backups.files | sort(attribute='mtime') | last }}"
+    forgejo_latest_db_backup: "{{ forgejo_db_backups.files | sort(attribute='mtime') | last }}"
+  when:
+    - forgejo_should_attempt_restore
+    - backup_found
 
 # =============================================================================
 # DOCKER COMPOSE DEPLOYMENT
@@ -181,42 +177,18 @@
   become: true
   notify: Restart Forgejo
 
-- name: Start Forgejo with Docker Compose
-  community.docker.docker_compose_v2:
-    project_src: /opt/forgejo
-    state: present
-    pull: "always"
-  become: true
-
-- name: Wait for Forgejo to be ready
-  ansible.builtin.uri:
-    url: "http://localhost:{{ forgejo_port | default('3000') }}"
-    method: GET
-    status_code: 200
-  register: forgejo_health
-  until: forgejo_health.status == 200
-  retries: 30
-  delay: 10
-
-# =============================================================================
-# RESTORE FROM RESTIC (Fresh Install Only)
-# =============================================================================
-
-- name: Restore File Data from Restic
+- name: Restore Forgejo file data from SMB archive
   ansible.builtin.shell: |
-    source /opt/forgejo/restic-env.sh
-    # Restore 'files' tag to root (restic preserves full paths /var/lib/forgejo/data)
-    restic restore latest --tag files --target / --insecure-tls
+    tar --zstd -xpf "{{ forgejo_latest_data_backup.path }}" -C /
   args:
     executable: /bin/bash
   become: true
-  register: file_restore_result
-  changed_when: file_restore_result.rc == 0 and 'restoring' in file_restore_result.stderr
-  failed_when: file_restore_result.rc != 0
+  register: forgejo_file_restore_result
+  changed_when: forgejo_file_restore_result.rc == 0
+  failed_when: forgejo_file_restore_result.rc != 0
   when:
-    - is_fresh_install
+    - forgejo_should_attempt_restore
     - backup_found
-    - not (forgejo_force_fresh | default(false))
 
 - name: Set correct ownership on restored data
   ansible.builtin.file:
@@ -226,16 +198,32 @@
     recurse: true
   become: true
   when:
-    - is_fresh_install
+    - forgejo_should_attempt_restore
     - backup_found
-    - not (forgejo_force_fresh | default(false))
 
-- name: Start Forgejo (Required for DB Restore)
+- name: Remove stale Forgejo authorized_keys file
+  ansible.builtin.file:
+    path: /var/lib/forgejo/data/git/.ssh/authorized_keys
+    state: absent
+  become: true
+  when: forgejo_should_attempt_restore
+
+- name: Start Forgejo with Docker Compose
   community.docker.docker_compose_v2:
     project_src: /opt/forgejo
     state: present
     pull: "always"
   become: true
+
+- name: Wait for Forgejo to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ forgejo_port | default('3001') }}"
+    method: GET
+    status_code: 200
+  register: forgejo_health
+  until: forgejo_health.status == 200
+  retries: 30
+  delay: 10
 
 - name: Wait for Database Container
   community.docker.docker_container_exec:
@@ -248,7 +236,7 @@
   become: true
   changed_when: false
   when:
-    - is_fresh_install
+    - forgejo_should_attempt_restore
     - backup_found
 
 - name: Verify database is ready for connections
@@ -262,28 +250,23 @@
   become: true
   changed_when: false
   when:
-    - is_fresh_install
+    - forgejo_should_attempt_restore
     - backup_found
-    - not (forgejo_force_fresh | default(false))
-    - backup_found
-    - not (forgejo_force_fresh | default(false))
 
-- name: Restore Database from Restic
+- name: Restore Forgejo database from SMB archive
   ansible.builtin.shell: |
     set -o pipefail
-    source /opt/forgejo/restic-env.sh
-    restic dump --tag database latest dump.sql --insecure-tls | \
+    zstd -dc "{{ forgejo_latest_db_backup.path }}" | \
     docker exec -i forgejo-db mysql -uroot -p{{ forgejo_db_root_password }} forgejo
   args:
     executable: /bin/bash
   become: true
-  register: db_restore_result
-  failed_when: db_restore_result.rc != 0
-  changed_when: "'restored' in db_restore_result.stderr or db_restore_result.rc == 0"
+  register: forgejo_db_restore_result
+  failed_when: forgejo_db_restore_result.rc != 0
+  changed_when: forgejo_db_restore_result.rc == 0
   when:
-    - is_fresh_install
+    - forgejo_should_attempt_restore
     - backup_found
-    - not (forgejo_force_fresh | default(false))
   notify: Restart Forgejo
 
 # =============================================================================
@@ -295,6 +278,22 @@
     src: forgejo-backup.sh.j2
     dest: /opt/forgejo/backup.sh
     mode: '0755'
+  become: true
+
+- name: Find legacy Forgejo backup environment files
+  ansible.builtin.find:
+    paths: /opt/forgejo
+    patterns: "r*ic-env.sh"
+    file_type: file
+    recurse: false
+  register: forgejo_legacy_backup_env_files
+  become: true
+
+- name: Remove legacy Forgejo backup environment files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ forgejo_legacy_backup_env_files.files }}"
   become: true
 
 - name: Create backup cron job
@@ -330,7 +329,6 @@
     port: "{{ item }}"
     proto: tcp
   loop:
-    - "{{ forgejo_port | default('3000') }}"
     - "{{ forgejo_ssh_port | default('2222') }}"
   become: true
   notify: Reload ufw
@@ -346,18 +344,18 @@
       Forgejo installation complete!
 
       {% if is_fresh_install and backup_found %}
-      ✓ Restored from Restic backup
+      ✓ Restored from SMB backup archives
       Your Forgejo instance should be ready with all previous data.
       {% elif is_fresh_install %}
       ⚠ Fresh installation - no backup found to restore
-      Access the web installer at: http://{{ ansible_host }}:{{ forgejo_port }}/install
+      Access the web installer at: https://{{ forgejo_domain }}/install
       Admin username: Choose any username EXCEPT 'admin' (reserved)
-      Admin email: Use @forgejo.{{ forgejo_domain | default(services.forgejo.domain | default('localhost')) }}
+      Admin email: Use @{{ forgejo_domain }}
       {% else %}
       ✓ Existing installation updated
       {% endif %}
 
-      Web interface: http://{{ ansible_host }}:{{ forgejo_port }}
-      SSH clone URL: ssh://git@{{ ansible_host }}:{{ forgejo_ssh_port }}/user/repo.git
+      Web interface: https://{{ forgejo_domain }}
+      SSH clone URL: ssh://git@{{ forgejo_domain }}:{{ forgejo_ssh_port }}/user/repo.git
       ===================================================================
   when: is_fresh_install or (backup_found is defined and backup_found)

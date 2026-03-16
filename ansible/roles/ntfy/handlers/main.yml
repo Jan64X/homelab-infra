@@ -8,9 +8,3 @@
     project_src: /opt/ntfy
     state: restarted
   become: true
-
-- name: Reload nginx
-  ansible.builtin.command:
-    cmd: docker compose -f /opt/ntfy/docker-compose.yml exec -T nginx nginx -s reload
-  changed_when: true
-  become: true
