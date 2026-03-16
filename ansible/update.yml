@@ -3,9 +3,9 @@
   hosts: all
   become: true
   become_method: "{{ ansible_become_method }}"
-  
+
   tasks:
     - name: Update apt cache and upgrade packages
       ansible.builtin.apt:
-        update_cache: yes
-        upgrade: yes
+        update_cache: true
+        upgrade: true
