@@ -1,0 +1,563 @@
+---
+# =============================================================================
+# PACKAGE INSTALLATION
+# =============================================================================
+
+- name: Install obsidian-livesync host packages
+  ansible.builtin.apt:
+    name:
+      - cifs-utils
+      - curl
+      - netcat-openbsd
+      - cron
+      - zstd
+    state: present
+    update_cache: true
+  become: true
+
+# =============================================================================
+# CHECK FOR EXISTING INSTALLATION
+# =============================================================================
+
+- name: Check if CouchDB has been initialized
+  ansible.builtin.stat:
+    path: /opt/obsidian-livesync/.initialized
+  register: obsidian_livesync_initialized
+  become: true
+
+- name: Check if CouchDB data exists
+  ansible.builtin.stat:
+    path: /opt/obsidian-livesync/data
+  register: obsidian_livesync_existing
+  become: true
+
+- name: Set installation facts
+  ansible.builtin.set_fact:
+    obsidian_livesync_is_fresh_install: "{{ not obsidian_livesync_existing.stat.exists }}"
+    obsidian_livesync_needs_init: "{{ not obsidian_livesync_initialized.stat.exists }}"
+
+# =============================================================================
+# CREDENTIALS
+# =============================================================================
+
+- name: Create credentials directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Generate CouchDB admin password
+  ansible.builtin.set_fact:
+    obsidian_livesync_couchdb_password: "{{ lookup('ansible.builtin.password',
+      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/obsidian_livesync_couchdb_password.txt'
+      + ' chars=ascii_letters,digits length=32') }}"
+  no_log: true
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
+
+- name: Create obsidian-livesync directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+  loop:
+    - { path: /opt/obsidian-livesync, owner: '5984', group: '5984' }
+    - { path: /opt/obsidian-livesync/data, owner: '5984', group: '5984' }
+    - { path: /opt/obsidian-livesync/etc, owner: '5984', group: '5984' }
+    - { path: /mnt/obsidian-livesync-backups, owner: '0', group: '0' }
+  become: true
+
+# =============================================================================
+# NAS MOUNT CONFIGURATION
+# =============================================================================
+
+- name: Create NAS backup credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ obsidian_livesync_nas_user }}
+      password={{ obsidian_livesync_nas_password }}
+    dest: /etc/obsidian-livesync-backup-nas-credentials
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+
+- name: Create systemd mount unit for backup share
+  ansible.builtin.template:
+    src: mnt-obsidian-livesync-backups.mount.j2
+    dest: /etc/systemd/system/mnt-obsidian\x2dlivesync\x2dbackups.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start NAS backup mount
+  ansible.builtin.systemd:
+    name: mnt-obsidian\x2dlivesync\x2dbackups.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for backup mount to be ready
+  ansible.builtin.wait_for:
+    path: /mnt/obsidian-livesync-backups
+    state: present
+    timeout: 60
+  become: true
+
+- name: Verify backup mount is active
+  ansible.builtin.command: mountpoint -q /mnt/obsidian-livesync-backups
+  register: obsidian_livesync_backup_mount_check
+  changed_when: false
+  become: true
+
+# =============================================================================
+# BACKUP DISCOVERY (Fresh Install Only)
+# =============================================================================
+
+- name: Find existing backups
+  ansible.builtin.find:
+    paths: /mnt/obsidian-livesync-backups
+    patterns: "obsidian-livesync-data-*.tar.zst"
+    use_regex: false
+  register: obsidian_livesync_backup_files
+  when: obsidian_livesync_is_fresh_install
+  become: true
+
+- name: Set backup facts
+  ansible.builtin.set_fact:
+    obsidian_livesync_backup_found: "{{ (obsidian_livesync_backup_files.files | default([]) | length > 0) }}"
+    obsidian_livesync_latest_backup: "{{ (obsidian_livesync_backup_files.files | default([]) | sort(attribute='mtime') | last) if (obsidian_livesync_backup_files.files | default([]) | length > 0) else '' }}"
+  when: obsidian_livesync_is_fresh_install
+
+# =============================================================================
+# DOCKER COMPOSE DEPLOYMENT
+# =============================================================================
+
+- name: Deploy docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/obsidian-livesync/docker-compose.yml
+    mode: '0644'
+    owner: '5984'
+    group: '5984'
+  become: true
+  notify: Restart obsidian-livesync
+
+- name: Start CouchDB with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/obsidian-livesync
+    state: present
+    pull: "always"
+  become: true
+
+- name: Wait for CouchDB to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/"
+    method: GET
+    status_code: [200, 401]
+  register: obsidian_livesync_health
+  until: obsidian_livesync_health.status in [200, 401]
+  retries: 30
+  delay: 5
+
+# =============================================================================
+# RESTORE FROM BACKUP (Fresh Install Only)
+# =============================================================================
+
+- name: Restore CouchDB data from backup archive
+  ansible.builtin.shell: |
+    cd /opt/obsidian-livesync
+    docker compose down
+    tar --zstd -xpf "{{ obsidian_livesync_latest_backup.path }}" -C /
+    chown -R 5984:5984 /opt/obsidian-livesync/data /opt/obsidian-livesync/etc
+    docker compose up -d
+  args:
+    executable: /bin/bash
+  become: true
+  register: obsidian_livesync_restore_result
+  changed_when: true
+  when:
+    - obsidian_livesync_is_fresh_install
+    - obsidian_livesync_backup_found | default(false)
+    - not (obsidian_livesync_force_fresh | default(false))
+
+- name: Wait for CouchDB after restore
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/"
+    method: GET
+    status_code: [200, 401]
+  register: obsidian_livesync_health_post_restore
+  until: obsidian_livesync_health_post_restore.status in [200, 401]
+  retries: 30
+  delay: 5
+  when:
+    - obsidian_livesync_is_fresh_install
+    - obsidian_livesync_backup_found | default(false)
+    - not (obsidian_livesync_force_fresh | default(false))
+
+# Backup archives include the etc/ dir with CouchDB's persisted config (from init),
+# so no init is needed after a restore. Create the marker and clear needs_init so
+# the init block below is skipped within this same play run.
+- name: Mark as initialized after restore
+  ansible.builtin.file:
+    path: /opt/obsidian-livesync/.initialized
+    state: touch
+    mode: '0644'
+  become: true
+  when:
+    - obsidian_livesync_is_fresh_install
+    - obsidian_livesync_backup_found | default(false)
+    - not (obsidian_livesync_force_fresh | default(false))
+
+- name: Clear needs_init after restore
+  ansible.builtin.set_fact:
+    obsidian_livesync_needs_init: false
+  when:
+    - obsidian_livesync_is_fresh_install
+    - obsidian_livesync_backup_found | default(false)
+    - not (obsidian_livesync_force_fresh | default(false))
+
+# =============================================================================
+# COUCHDB INITIALIZATION (Fresh Install Without Backup)
+# =============================================================================
+
+- name: Initialize CouchDB - enable single node cluster
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_cluster_setup"
+    method: POST
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      action: enable_single_node
+      username: "{{ obsidian_livesync_couchdb_user }}"
+      password: "{{ obsidian_livesync_couchdb_password }}"
+      bind_address: "0.0.0.0"
+      port: 5984
+      singlenode: true
+    status_code: [201, 400]
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - require valid user (chttpd)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/chttpd/require_valid_user"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"true"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - require valid user (chttpd_auth)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/chttpd_auth/require_valid_user"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"true"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - set WWW-Authenticate header
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/httpd/WWW-Authenticate"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"Basic realm=\"couchdb\""'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - enable CORS (httpd)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/httpd/enable_cors"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"true"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - enable CORS (chttpd)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/chttpd/enable_cors"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"true"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - set max HTTP request size
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/chttpd/max_http_request_size"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"4294967296"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - set max document size
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/couchdb/max_document_size"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"50000000"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - enable CORS credentials
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/cors/credentials"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"true"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Initialize CouchDB - set CORS origins
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ obsidian_livesync_port }}/_node/_local/_config/cors/origins"
+    method: PUT
+    user: "{{ obsidian_livesync_couchdb_user }}"
+    password: "{{ obsidian_livesync_couchdb_password }}"
+    force_basic_auth: true
+    body: '"app://obsidian.md,capacitor://localhost,http://localhost"'
+    body_format: raw
+    headers:
+      Content-Type: application/json
+    status_code: 200
+  when: obsidian_livesync_needs_init
+  no_log: true
+
+- name: Mark CouchDB as initialized
+  ansible.builtin.file:
+    path: /opt/obsidian-livesync/.initialized
+    state: touch
+    mode: '0644'
+  become: true
+  when: obsidian_livesync_needs_init
+
+# =============================================================================
+# SETUP URI GENERATION (Fresh Install Without Backup)
+# =============================================================================
+
+- name: Generate E2E encryption passphrase
+  ansible.builtin.set_fact:
+    obsidian_livesync_e2e_passphrase: "{{ lookup('ansible.builtin.password',
+      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/obsidian_livesync_e2e_passphrase.txt'
+      + ' chars=ascii_letters,digits length=32') }}"
+  no_log: true
+  when: obsidian_livesync_needs_init
+
+- name: Generate URI passphrase
+  ansible.builtin.set_fact:
+    obsidian_livesync_uri_passphrase: "{{ lookup('ansible.builtin.password',
+      playbook_dir + '/credentials/hosts/' + inventory_hostname + '/obsidian_livesync_uri_passphrase.txt'
+      + ' chars=ascii_letters,digits length=16') }}"
+  no_log: true
+  when: obsidian_livesync_needs_init
+
+- name: Copy setup URI generator to server
+  ansible.builtin.copy:
+    src: generate_setupuri.ts
+    dest: /opt/obsidian-livesync/generate_setupuri.ts
+    mode: '0644'
+  become: true
+  when: obsidian_livesync_needs_init
+
+- name: Generate Obsidian LiveSync setup URI via deno
+  ansible.builtin.shell: |
+    docker run --rm \
+      -e "hostname=https://{{ obsidian_livesync_domain }}" \
+      -e "username={{ obsidian_livesync_couchdb_user }}" \
+      -e "password={{ obsidian_livesync_couchdb_password }}" \
+      -e "database={{ obsidian_livesync_database }}" \
+      -e "passphrase={{ obsidian_livesync_e2e_passphrase }}" \
+      -e "uri_passphrase={{ obsidian_livesync_uri_passphrase }}" \
+      -v /opt/obsidian-livesync/generate_setupuri.ts:/app/generate_setupuri.ts:ro \
+      denoland/deno:latest \
+      run --allow-net --allow-env /app/generate_setupuri.ts
+  args:
+    executable: /bin/bash
+  become: true
+  register: obsidian_livesync_uri_output
+  no_log: true
+  when: obsidian_livesync_needs_init
+
+- name: Extract setup URI from deno output
+  ansible.builtin.set_fact:
+    obsidian_livesync_setup_uri: "{{ obsidian_livesync_uri_output.stdout_lines | select('match', '^obsidian://') | first }}"
+  no_log: true
+  when: obsidian_livesync_needs_init
+
+- name: Write setup URI file on server
+  ansible.builtin.copy:
+    content: |
+      # Obsidian LiveSync Setup URI
+      # ---------------------------------------------------------------
+      # 1. Install the Self-hosted LiveSync plugin in Obsidian
+      # 2. Run command: "Use the copied setup URI"
+      # 3. Paste the URI below
+      # 4. When prompted for the passphrase, enter the URI passphrase below
+      #
+      # URI passphrase: {{ obsidian_livesync_uri_passphrase }}
+      # ---------------------------------------------------------------
+      {{ obsidian_livesync_setup_uri }}
+    dest: /opt/obsidian-livesync/setup-uri.txt
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+  when: obsidian_livesync_needs_init
+
+- name: Fetch setup URI file to local credentials
+  ansible.builtin.fetch:
+    src: /opt/obsidian-livesync/setup-uri.txt
+    dest: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}/obsidian_livesync_setup_uri.txt"
+    flat: true
+  become: true
+  when: obsidian_livesync_needs_init
+
+# =============================================================================
+# BACKUP AUTOMATION
+# =============================================================================
+
+- name: Deploy backup script
+  ansible.builtin.template:
+    src: obsidian-livesync-backup.sh.j2
+    dest: /opt/obsidian-livesync/backup.sh
+    mode: '0755'
+  become: true
+
+- name: Create backup cron job
+  ansible.builtin.cron:
+    name: "Obsidian LiveSync daily backup"
+    minute: "0"
+    hour: "3"
+    job: "/opt/obsidian-livesync/backup.sh >> /var/log/obsidian-livesync-backup.log 2>&1"
+    user: root
+  become: true
+
+- name: Create log rotation for backup
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/obsidian-livesync-backup
+    content: |
+      /var/log/obsidian-livesync-backup.log {
+          daily
+          rotate 7
+          compress
+          missingok
+          notifempty
+      }
+    mode: '0644'
+  become: true
+
+# =============================================================================
+# POST-INSTALL INFO
+# =============================================================================
+
+- name: Display installation info
+  ansible.builtin.debug:
+    msg: |
+      ===================================================================
+      Obsidian LiveSync installation complete!
+
+      {% if obsidian_livesync_is_fresh_install and (obsidian_livesync_backup_found | default(false)) %}
+      Restored from SMB backup archive.
+      {% elif obsidian_livesync_is_fresh_install %}
+      Fresh installation complete.
+
+      Setup URI has been written to:
+        - Server:  /opt/obsidian-livesync/setup-uri.txt
+        - Local:   credentials/hosts/{{ inventory_hostname }}/obsidian_livesync_setup_uri.txt
+
+      URI passphrase: {{ obsidian_livesync_uri_passphrase | default('(see credentials file)') }}
+
+      To set up Obsidian:
+        1. Install the Self-hosted LiveSync plugin
+        2. Run command: "Use the copied setup URI"
+        3. Paste the URI from setup-uri.txt
+        4. Enter the URI passphrase above when prompted
+      {% else %}
+      Existing installation updated.
+      {% endif %}
+
+      CouchDB URL: https://{{ obsidian_livesync_domain }}
+      Password:    credentials/hosts/{{ inventory_hostname }}/obsidian_livesync_couchdb_password.txt
+      TLS:         handled by the shared ingress role
+      Backups:     /mnt/obsidian-livesync-backups (daily at 03:00)
+      ===================================================================

@@ -1,0 +1,18 @@
+---
+obsidian_livesync_version: "latest"
+obsidian_livesync_port: 5984
+obsidian_livesync_domain: "{{ homelab_service_domains.obsidian_livesync | default('obsidian-sync.' ~ homelab_base_domain) }}"
+
+# CouchDB admin username (password is auto-generated into credentials/)
+obsidian_livesync_couchdb_user: "admin"
+
+# CouchDB database name for vault storage
+obsidian_livesync_database: "obsidiannotes"
+
+# NAS backup configuration - set in group_vars/homelab.yml
+obsidian_livesync_nas_user: ""
+obsidian_livesync_nas_password: ""
+obsidian_livesync_backup_share: ""
+
+# Set to true to force a fresh install (skips backup restore)
+obsidian_livesync_force_fresh: false

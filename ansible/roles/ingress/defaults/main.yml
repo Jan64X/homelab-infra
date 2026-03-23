@@ -32,4 +32,9 @@ ingress_services:
     backend_server: "http://seedbox-nginx:80"
     client_max_body_size: 1024M
     proxy_read_timeout: 300
+  obsidian_livesync:
+    domain: "{{ homelab_service_domains.obsidian_livesync | default('obsidian-sync.' ~ homelab_base_domain) }}"
+    backend_server: "http://obsidian-livesync:5984"
+    client_max_body_size: 256M
+    proxy_read_timeout: 300
 
