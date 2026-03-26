@@ -1,0 +1,12 @@
+[Unit]
+Description=Wait for NAS to be reachable via SMB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'until nc -zvw1 {{ nas_ip }} 445; do sleep 1; done'
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

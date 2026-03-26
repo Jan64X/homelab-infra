@@ -1,0 +1,11 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+
+- name: Restart Joplin
+  community.docker.docker_compose_v2:
+    project_src: /opt/joplin
+    state: restarted
+  become: true

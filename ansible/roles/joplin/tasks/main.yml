@@ -1,0 +1,276 @@
+---
+# =============================================================================
+# PACKAGE INSTALLATION
+# =============================================================================
+
+- name: Install joplin host packages
+  ansible.builtin.apt:
+    name:
+      - cifs-utils
+      - netcat-openbsd
+      - cron
+      - zstd
+    state: present
+    update_cache: true
+  become: true
+
+# =============================================================================
+# CHECK FOR EXISTING INSTALLATION
+# =============================================================================
+
+- name: Check if Joplin is already installed
+  ansible.builtin.stat:
+    path: /var/lib/joplin/db_data/PG_VERSION
+  register: joplin_existing
+
+- name: Set installation type
+  ansible.builtin.set_fact:
+    joplin_is_fresh_install: "{{ not joplin_existing.stat.exists }}"
+
+- name: Decide whether backup restore path should run
+  ansible.builtin.set_fact:
+    joplin_should_attempt_restore: >-
+      {{
+        (joplin_is_fresh_install or (joplin_force_restore_from_backup | default(false))) and
+        not (joplin_force_fresh | default(false))
+      }}
+
+# =============================================================================
+# CREDENTIALS GENERATION
+# =============================================================================
+
+- name: Create credentials directory
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/credentials/hosts/{{ inventory_hostname }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
+- name: Generate database passwords
+  ansible.builtin.set_fact:
+    joplin_db_password: "{{ lookup('ansible.builtin.password',
+                         playbook_dir + '/credentials/hosts/' + inventory_hostname + '/joplin_db_password.txt' +
+                         ' chars=ascii_letters,digits length=32') }}"
+
+# =============================================================================
+# DIRECTORY STRUCTURE
+# =============================================================================
+
+- name: Create Joplin directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+  loop:
+    - { path: /opt/joplin, owner: '1000', group: '1000' }
+    - { path: /var/lib/joplin/db_data, owner: '999', group: '999' }
+    - { path: /mnt/joplin-backups, owner: '0', group: '0' }
+  become: true
+
+# =============================================================================
+# NAS BACKUP MOUNT & DISCOVERY
+# =============================================================================
+
+- name: Create Joplin NAS credentials file
+  ansible.builtin.copy:
+    content: |
+      username={{ joplin_nas_user }}
+      password={{ joplin_nas_password }}
+    dest: /etc/joplin-backup-nas-credentials
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+
+- name: Create wait-for-nas systemd service
+  ansible.builtin.template:
+    src: wait-for-nas.service.j2
+    dest: /etc/systemd/system/wait-for-nas.service
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Create Joplin backup mount unit
+  ansible.builtin.template:
+    src: mnt-joplin-backups.mount.j2
+    dest: /etc/systemd/system/mnt-joplin\x2dbackups.mount
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  notify: Reload systemd
+
+- name: Enable wait-for-nas service
+  ansible.builtin.systemd:
+    name: wait-for-nas.service
+    enabled: true
+    daemon_reload: true
+  become: true
+
+- name: Enable and start Joplin backup mount
+  ansible.builtin.systemd:
+    name: mnt-joplin\x2dbackups.mount
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Verify Joplin backup mount is active
+  ansible.builtin.command: mountpoint -q /mnt/joplin-backups
+  register: joplin_backup_mount_check
+  changed_when: false
+  become: true
+
+- name: Find Joplin database backups
+  ansible.builtin.find:
+    paths: /mnt/joplin-backups
+    patterns: "joplin-db-*.sql.zst"
+    use_regex: false
+  register: joplin_db_backups
+  when: joplin_should_attempt_restore
+
+- name: Determine if restore is needed
+  ansible.builtin.set_fact:
+    joplin_backup_found: "{{ (joplin_db_backups.files | default([]) | length > 0) }}"
+  when: joplin_should_attempt_restore
+
+- name: Set latest Joplin backup files
+  ansible.builtin.set_fact:
+    joplin_latest_db_backup: "{{ joplin_db_backups.files | sort(attribute='mtime') | last }}"
+  when:
+    - joplin_should_attempt_restore
+    - joplin_backup_found
+
+# =============================================================================
+# DOCKER COMPOSE DEPLOYMENT
+# =============================================================================
+
+- name: Deploy docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/joplin/docker-compose.yml
+    mode: '0644'
+  become: true
+  notify: Restart Joplin
+
+- name: Start ONLY Database for Restore
+  community.docker.docker_compose_v2:
+    project_src: /opt/joplin
+    state: present
+    services:
+      - db
+  become: true
+  when:
+    - joplin_should_attempt_restore
+    - joplin_backup_found
+
+- name: Pause to allow PostgreSQL container to start its entrypoint
+  ansible.builtin.pause:
+    seconds: 10
+  when:
+    - joplin_should_attempt_restore
+    - joplin_backup_found
+
+- name: Wait for Database Container
+  community.docker.docker_container_exec:
+    container: joplin-db
+    command: pg_isready -U joplin
+  register: joplin_db_check
+  until: joplin_db_check.rc == 0
+  retries: 60
+  delay: 5
+  become: true
+  changed_when: false
+  when:
+    - joplin_should_attempt_restore
+    - joplin_backup_found
+
+- name: Restore Joplin database from SMB archive
+  ansible.builtin.shell: |
+    set -o pipefail
+    zstd -dc "{{ joplin_latest_db_backup.path }}" | \
+    docker exec -i joplin-db psql -U joplin -d joplin
+  args:
+    executable: /bin/bash
+  become: true
+  register: joplin_db_restore_result
+  failed_when: joplin_db_restore_result.rc != 0
+  changed_when: joplin_db_restore_result.rc == 0
+  when:
+    - joplin_should_attempt_restore
+    - joplin_backup_found
+  notify: Restart Joplin
+
+- name: Start all Joplin services
+  community.docker.docker_compose_v2:
+    project_src: /opt/joplin
+    state: present
+    pull: "always"
+  become: true
+
+# =============================================================================
+# BACKUP AUTOMATION
+# =============================================================================
+
+- name: Create backup script
+  ansible.builtin.template:
+    src: joplin-backup.sh.j2
+    dest: /opt/joplin/backup.sh
+    mode: '0755'
+  become: true
+
+- name: Create backup cron job
+  ansible.builtin.cron:
+    name: "Joplin daily backup"
+    minute: "0"
+    hour: "3"
+    job: "/opt/joplin/backup.sh >> /var/log/joplin-backup.log 2>&1"
+    user: root
+  become: true
+
+- name: Create log rotation for backup
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/joplin-backup
+    content: |
+      /var/log/joplin-backup.log {
+          daily
+          rotate 7
+          compress
+          missingok
+          notifempty
+      }
+    mode: '0644'
+  become: true
+
+# =============================================================================
+# FIRST RUN INSTRUCTIONS
+# =============================================================================
+
+- name: Display first run instructions
+  ansible.builtin.debug:
+    msg: |
+      ===================================================================
+      Joplin installation complete!
+
+      {% if joplin_is_fresh_install and joplin_backup_found %}
+      Restored from SMB backup archives
+      Your Joplin instance should be ready with all previous data.
+      {% elif joplin_is_fresh_install %}
+      Fresh installation - no backup found to restore
+      Access the web interface at: https://{{ joplin_domain }}
+      Default Admin username: admin@localhost
+      Default Admin password: admin
+      Please change these immediately upon logging in!
+      {% else %}
+      Existing installation updated
+      {% endif %}
+
+      Web interface: https://{{ joplin_domain }}
+      ===================================================================
+  when: joplin_is_fresh_install or (joplin_backup_found is defined and joplin_backup_found)

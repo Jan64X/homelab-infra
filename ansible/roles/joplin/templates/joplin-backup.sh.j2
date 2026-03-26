@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+backup_dir="/mnt/joplin-backups"
+timestamp="$(date '+%Y%m%d-%H%M%S')"
+db_archive="${backup_dir}/joplin-db-${timestamp}.sql.zst"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+if ! mountpoint -q "$backup_dir"; then
+    log "ERROR: Joplin backup share is not mounted at $backup_dir."
+    exit 1
+fi
+
+log "Starting Joplin SMB backup..."
+
+log "Writing compressed database dump..."
+docker exec joplin-db pg_dump -U joplin joplin | zstd -T0 -19 -o "$db_archive"
+
+log "Cleaning up backups older than 30 days..."
+find "$backup_dir" -name "joplin-db-*.sql.zst" -type f -mtime +30 -delete
+
+log "Backup archive complete."

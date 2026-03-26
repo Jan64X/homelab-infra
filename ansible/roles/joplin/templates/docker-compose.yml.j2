@@ -1,0 +1,53 @@
+networks:
+  joplin:
+    external: false
+  homelab:
+    external: true
+    name: {{ docker_network_name }}
+
+services:
+  server:
+    container_name: joplin
+    image: joplin/server:{{ joplin_version | default('latest') }}
+    restart: unless-stopped
+    networks:
+      joplin:
+      homelab:
+        aliases:
+          - joplin
+    environment:
+      - APP_BASE_URL=https://{{ joplin_domain }}
+      - APP_PORT=22300
+      - DB_CLIENT=pg
+      - POSTGRES_PASSWORD={{ joplin_db_password }}
+      - POSTGRES_DATABASE=joplin
+      - POSTGRES_USER=joplin
+      - POSTGRES_PORT=5432
+      - POSTGRES_HOST=db
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    container_name: joplin-db
+    image: postgres:16
+    restart: unless-stopped
+    networks:
+      joplin:
+        aliases:
+          - db
+    environment:
+      - POSTGRES_PASSWORD={{ joplin_db_password }}
+      - POSTGRES_USER=joplin
+      - POSTGRES_DB=joplin
+    volumes:
+      - /var/lib/joplin/db_data:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,10 @@
+---
+# Joplin Docker image version
+joplin_version: "latest"
+
+# Domains
+joplin_domain: "{{ homelab_service_domains.joplin | default('joplin.' ~ homelab_base_domain) }}"
+
+# Restore configuration
+joplin_force_fresh: false
+joplin_force_restore_from_backup: false
